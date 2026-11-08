@@ -5,7 +5,10 @@ import {
   Copy,
   Cpu,
   Lock,
-  Box
+  Box,
+  FileText,
+  Terminal,
+  ShieldAlert
 } from 'lucide-react';
 
 interface HostInfo {
@@ -31,7 +34,7 @@ interface HostInfo {
  * Step-by-step Docker & Linux Host Installation Guide and Supply-Chain Audit.
  */
 export const DeploymentGuide: React.FC = () => {
-  const [activeSection, setActiveSection] = useState<'docker' | 'linux' | 'systemd' | 'audit'>('docker');
+  const [activeSection, setActiveSection] = useState<'docker' | 'linux' | 'systemd' | 'audit' | 'procedure'>('docker');
   const [dockerSubSection, setDockerSubSection] = useState<
     'script' | 'compose-headless' | 'compose-fullstack' | 'cli' | 'cis'
   >('script');
@@ -235,6 +238,7 @@ WantedBy=multi-user.target`;
             { id: 'linux', label: 'Linux Host Installation' },
             { id: 'systemd', label: 'Systemd Service Daemon' },
             { id: 'audit', label: 'Supply-Chain & Component Audit' },
+            { id: 'procedure', label: 'AI Agent Test Procedure (3-Phase)' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -662,6 +666,198 @@ WantedBy=multi-user.target`;
                   </tr>
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI Agent Functionality Test Procedure Tab */}
+      {activeSection === 'procedure' && (
+        <div className="space-y-6">
+          <div className="rounded-lg border border-slate-800 bg-slate-900/90 p-5 space-y-3">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-mono font-bold uppercase text-emerald-400">
+                    Verification Guide
+                  </span>
+                  <span className="text-slate-600">·</span>
+                  <h3 className="text-sm font-semibold text-white">AI Agent Least-Privilege Functionality Test Procedure</h3>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">
+                  Step-by-step verification procedure for creating a dedicated AI agent service account (<code className="text-slate-200">svc-group-viewer-agent</code>), locking down its rights to view group members only, and verifying the 3-phase security pipeline.
+                </p>
+              </div>
+              <div className="text-xs font-mono text-slate-400 bg-slate-950 px-3 py-1.5 rounded border border-slate-800">
+                Documentation: <span className="text-emerald-400 font-semibold">FUNCTIONALITY_TEST_PROCEDURE.md</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Step 1: AD Account Provisioning */}
+          <div className="rounded-lg border border-slate-800 bg-slate-900/90 p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-[11px] font-mono font-bold uppercase text-blue-400">Step 1</span>
+                <h4 className="text-sm font-semibold text-white">Create AI Agent Service Account in Active Directory</h4>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Identity: <strong className="text-slate-200">svc-group-viewer-agent</strong> | Domain: <code className="text-slate-300">corp.acme.internal</code>
+                </p>
+              </div>
+              <button
+                onClick={() =>
+                  copyCode(
+                    'ad-user-create',
+                    `# PowerShell on Windows Server Domain Controller\n$SecurePassword = ConvertTo-SecureString "GroupViewerSecret2026!" -AsPlainText -Force\nNew-ADUser -Name "svc-group-viewer-agent" -SamAccountName "svc-group-viewer-agent" -UserPrincipalName "svc-group-viewer-agent@corp.acme.internal" -DisplayName "Group Membership Viewer AI Agent" -Path "OU=ServiceAccounts,DC=corp,DC=acme,DC=internal" -AccountPassword $SecurePassword -Enabled $true -PasswordNeverExpires $true`
+                  )
+                }
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono cursor-pointer"
+              >
+                {copiedSnippet === 'ad-user-create' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedSnippet === 'ad-user-create' ? 'Copied' : 'Copy PowerShell'}</span>
+              </button>
+            </div>
+
+            <pre className="p-3.5 rounded bg-slate-950 border border-slate-800 text-[11px] font-mono text-slate-300 overflow-x-auto leading-relaxed">
+{`# 1. Target OU and Domain:
+$OuPath = "OU=ServiceAccounts,DC=corp,DC=acme,DC=internal"
+
+# 2. Provision AI Agent User with min 12-char complex password:
+$SecurePassword = ConvertTo-SecureString "GroupViewerSecret2026!" -AsPlainText -Force
+New-ADUser \`
+    -Name "svc-group-viewer-agent" \`
+    -SamAccountName "svc-group-viewer-agent" \`
+    -UserPrincipalName "svc-group-viewer-agent@corp.acme.internal" \`
+    -DisplayName "Group Membership Viewer AI Agent" \`
+    -Description "AI Agent restricted strictly to viewing users in Active Directory groups" \`
+    -Path $OuPath \`
+    -AccountPassword $SecurePassword \`
+    -Enabled $true \`
+    -PasswordNeverExpires $true \`
+    -CannotChangePassword $true`}
+            </pre>
+          </div>
+
+          {/* Step 2: Policy Configuration */}
+          <div className="rounded-lg border border-slate-800 bg-slate-900/90 p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-[11px] font-mono font-bold uppercase text-blue-400">Step 2</span>
+                <h4 className="text-sm font-semibold text-white">Configure Least-Privilege Policy in AD Proxy (ad_proxy/config.yaml)</h4>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Grant ONLY <code className="text-emerald-400 font-mono">list_group_members</code> and restrict Tier-0 groups.
+                </p>
+              </div>
+              <button
+                onClick={() =>
+                  copyCode(
+                    'ad-proxy-policy',
+                    `  - account_identifier: "svc-group-viewer-agent"\n    description: "AI Agent restricted strictly to viewing users in Active Directory groups"\n    permitted_commands:\n      - "list_group_members"\n    denied_commands:\n      - "search_users"\n      - "get_user_attributes"\n      - "add_user_to_group"\n      - "remove_user_from_group"\n      - "enable_account"\n      - "disable_account"\n      - "unlock_account"\n      - "reset_password"\n      - "custom_search_filter"\n    rules:\n      - command: "list_group_members"\n        allowed_groups:\n          - "VPN-Users"\n          - "Developers"\n          - "Helpdesk-Tier1"\n        restricted_groups:\n          - "Domain Admins"\n          - "Enterprise Admins"\n          - "Schema Admins"\n          - "Administrators"`
+                  )
+                }
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono cursor-pointer"
+              >
+                {copiedSnippet === 'ad-proxy-policy' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedSnippet === 'ad-proxy-policy' ? 'Copied' : 'Copy YAML'}</span>
+              </button>
+            </div>
+
+            <pre className="p-3.5 rounded bg-slate-950 border border-slate-800 text-[11px] font-mono text-emerald-300 overflow-x-auto leading-relaxed">
+{`allowed_service_accounts:
+  - account_identifier: "svc-group-viewer-agent"
+    description: "AI Agent restricted strictly to viewing users in Active Directory groups"
+    permitted_commands:
+      - "list_group_members"
+    denied_commands:
+      - "search_users"
+      - "get_user_attributes"
+      - "add_user_to_group"
+      - "remove_user_from_group"
+      - "enable_account"
+      - "disable_account"
+      - "unlock_account"
+      - "reset_password"
+      - "custom_search_filter"
+    rules:
+      - command: "list_group_members"
+        allowed_groups:
+          - "VPN-Users"
+          - "Developers"
+          - "Helpdesk-Tier1"
+        restricted_groups:
+          - "Domain Admins"
+          - "Enterprise Admins"
+          - "Schema Admins"
+          - "Administrators"`}
+            </pre>
+          </div>
+
+          {/* Three Test Stages Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* Phase 1: Wrong Password */}
+            <div className="rounded-lg border border-amber-800/80 bg-amber-950/20 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-amber-900/60 text-amber-300 border border-amber-700/50">
+                  Phase 1: Wrong Password
+                </span>
+                <span className="text-[11px] font-mono text-amber-400 font-bold">Severity: 8</span>
+              </div>
+              <h5 className="text-xs font-semibold text-white">Authentication Failure Defense</h5>
+              <p className="text-[11px] text-slate-300">
+                Calling with password <code className="text-amber-300 font-mono">WrongPassword123!</code> is rejected at Stage 2 LDAPS Simple Bind.
+              </p>
+              <div className="p-2.5 rounded bg-slate-950 border border-slate-800 font-mono text-[10px] text-slate-300 space-y-1">
+                <div className="text-rose-400 font-bold">Status: AUTHENTICATION_FAILED</div>
+                <div className="text-slate-400">Response: &quot;Access Denied: Invalid Active Directory credentials...&quot;</div>
+                <div className="text-emerald-400 mt-2">Log Output:</div>
+                <div className="text-slate-500 overflow-x-auto text-[9px]">
+                  [WARNING] [ad_proxy.auth] Authentication failed for &apos;svc-group-viewer-agent&apos;: Invalid Active Directory credentials (bad password).
+                </div>
+              </div>
+            </div>
+
+            {/* Phase 2: Forbidden Request */}
+            <div className="rounded-lg border border-rose-800/80 bg-rose-950/20 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-rose-900/60 text-rose-300 border border-rose-700/50">
+                  Phase 2: Forbidden Command
+                </span>
+                <span className="text-[11px] font-mono text-rose-400 font-bold">Severity: 7</span>
+              </div>
+              <h5 className="text-xs font-semibold text-white">RBAC Least-Privilege Rejection</h5>
+              <p className="text-[11px] text-slate-300">
+                Calling with valid password <code className="text-emerald-300 font-mono">GroupViewerSecret2026!</code> and command <code className="text-rose-300 font-mono">search_users</code> is blocked.
+              </p>
+              <div className="p-2.5 rounded bg-slate-950 border border-slate-800 font-mono text-[10px] text-slate-300 space-y-1">
+                <div className="text-rose-400 font-bold">Status: FORBIDDEN</div>
+                <div className="text-slate-400">Response: &quot;Access Denied: Command &apos;search_users&apos; is explicitly denied...&quot;</div>
+                <div className="text-emerald-400 mt-2">Log Output:</div>
+                <div className="text-slate-500 overflow-x-auto text-[9px]">
+                  [WARNING] [ad_proxy.rbac] Access Denied: Command &apos;search_users&apos; explicitly blacklisted for account &apos;svc-group-viewer-agent&apos;.
+                </div>
+              </div>
+            </div>
+
+            {/* Phase 3: Allowed Request */}
+            <div className="rounded-lg border border-emerald-800/80 bg-emerald-950/20 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-mono font-bold uppercase px-2 py-0.5 rounded bg-emerald-900/60 text-emerald-300 border border-emerald-700/50">
+                  Phase 3: Allowed Group View
+                </span>
+                <span className="text-[11px] font-mono text-emerald-400 font-bold">Severity: 3</span>
+              </div>
+              <h5 className="text-xs font-semibold text-white">Authorized Query Success</h5>
+              <p className="text-[11px] text-slate-300">
+                Calling with valid password and permitted command <code className="text-emerald-300 font-mono">list_group_members</code> for <code className="text-emerald-300 font-mono">VPN-Users</code> succeeds.
+              </p>
+              <div className="p-2.5 rounded bg-slate-950 border border-slate-800 font-mono text-[10px] text-slate-300 space-y-1">
+                <div className="text-emerald-400 font-bold">Status: SUCCESS</div>
+                <div className="text-slate-300">Data: [&#123;&quot;displayName&quot;: &quot;Alex Rivera&quot;, &quot;mail&quot;: &quot;alex.rivera@...&quot;&#125;]</div>
+                <div className="text-emerald-400 mt-2">Log Output:</div>
+                <div className="text-slate-500 overflow-x-auto text-[9px]">
+                  [INFO] [ad_proxy.rbac] Access Granted: Account &apos;svc-group-viewer-agent&apos; authorized for command &apos;list_group_members&apos;.
+                </div>
+              </div>
             </div>
           </div>
         </div>

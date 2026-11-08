@@ -80,14 +80,35 @@ allowed_service_accounts:
 
 siem:
   enabled: true
-  format: "cef" # "cef" | "ecs" | "syslog_rfc5424"
+  format: "ecs" # "ecs" | "cef" | "splunk_hec" | "wazuh_json" | "syslog_rfc5424"
   destinations:
     - "file"
     - "syslog"
+    # - "splunk"
+    # - "wazuh"
   log_file_path: "/var/log/ad-proxy/audit.log"
-  syslog_host: "splunk.corp.example.com"
+  syslog_host: "siem-collector.corp.example.com"
   syslog_port: 514
   syslog_protocol: "TCP"
+
+  # Splunk HEC forwarder:
+  splunk:
+    enabled: true
+    hec_url: "https://splunk.corp.example.com:8088/services/collector/event"
+    hec_token: "${SPLUNK_HEC_TOKEN}"
+    index: "active_directory"
+    source: "ad-ldaps-proxy"
+    sourcetype: "active_directory:proxy:audit"
+    verify_ssl: true
+
+  # Wazuh SIEM forwarder:
+  wazuh:
+    enabled: true
+    host: "wazuh-manager.corp.example.com"
+    port: 514
+    protocol: "UDP"
+    alerts_file: "/var/ossec/logs/alerts/ad_proxy_alerts.json"
+
   log_all_queries: true
 
 listen_host: "0.0.0.0"

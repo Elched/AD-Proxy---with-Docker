@@ -36,7 +36,7 @@ export const TestRunner: React.FC<TestRunnerProps> = ({ onRunFinished }) => {
         success: false,
         output: 'Failed to run test suite: ' + err.message,
         passed_count: 0,
-        total_count: 37,
+        total_count: 43,
       });
     } finally {
       setRunning(false);
@@ -44,6 +44,9 @@ export const TestRunner: React.FC<TestRunnerProps> = ({ onRunFinished }) => {
   };
 
   const securityCheckpoints = [
+    { name: 'Splunk HEC SIEM Event Formatting & Forwarding', desc: 'Validates Splunk HEC envelope structure (time, host, source, sourcetype, index) and threat indicators' },
+    { name: 'Wazuh SIEM / XDR Decoded Log & Alert Schema', desc: 'Validates native Wazuh rule levels (3/7/12), agent/manager metadata, decoders, and localfile ingestion' },
+    { name: 'AI Agent 3-Step Functional Procedure Verification', desc: 'Validates credential authentication failure on bad password, RBAC denial on forbidden commands, and authorized group members view' },
     { name: 'Docker & Compose v2 Hardening Compliance', desc: 'Verifies non-root execution (UID 10001), read-only rootfs, dropped capabilities, and modern Compose v2 spec' },
     { name: 'Turnkey Docker Installer Script (docker-install.sh)', desc: 'Validates syntax, execution options (--headless, --fullstack, --status, --down), and volume initialization' },
     { name: 'Full-Stack Docker Compose v2 Specification', desc: 'Verifies web console (3000) and LDAPS REST (10636) ports, dropped capabilities, and healthchecks' },
@@ -80,7 +83,7 @@ export const TestRunner: React.FC<TestRunnerProps> = ({ onRunFinished }) => {
               <h2 className="text-base font-semibold text-white">Security & Functional Verification Suite</h2>
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Execute the complete Python unit, security audit, rogue agent defense, and Docker / Linux host compliance test suites.
+              Execute the complete Python unit, security audit, rogue agent defense, Splunk/Wazuh forwarders, and Docker / Linux host compliance test suites.
             </p>
           </div>
 
@@ -92,12 +95,12 @@ export const TestRunner: React.FC<TestRunnerProps> = ({ onRunFinished }) => {
             {running ? (
               <>
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>Executing 37 Verification Tests...</span>
+                <span>Executing 43 Verification Tests...</span>
               </>
             ) : (
               <>
                 <Play className="w-3.5 h-3.5 fill-current" />
-                <span>Execute Complete Test Suite (37 Tests)</span>
+                <span>Execute Complete Test Suite (43 Tests)</span>
               </>
             )}
           </button>

@@ -21,7 +21,7 @@ export const SiemAuditStream: React.FC = () => {
   const [outcomeFilter, setOutcomeFilter] = useState('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEvent, setSelectedEvent] = useState<SiemEvent | null>(null);
-  const [viewFormat, setViewFormat] = useState<'ecs' | 'cef'>('ecs');
+  const [viewFormat, setViewFormat] = useState<'ecs' | 'cef' | 'splunk' | 'wazuh'>('ecs');
 
   const fetchLogs = async () => {
     setLoading(true);
@@ -100,6 +100,117 @@ export const SiemAuditStream: React.FC = () => {
     }|${sev}|src=${e.client_ip || '127.0.0.1'} suser=${e.caller_account} cs1Label=Command cs1=${
       e.command
     } outcome=${e.outcome}${extra} msg=${(e.message || '').replace(/\|/g, '\\|')}`;
+  };
+
+  const toSplunkHec = (e: SiemEvent): string => {
+    const isAlert =
+      e.is_high_severity_alert ||
+      e.severity === 10 ||
+      e.outcome === 'SECURITY_ALERT_ROGUE_AGENT' ||
+      e.status_code === 'CRITICAL_SECURITY_ALERT';
+    let epoch = Date.now() / 1000;
+    if (e.timestamp) {
+      const parsed = new Date(e.timestamp).getTime();
+      if (!isNaN(parsed)) epoch = parsed / 1000;
+    }
+    const payload: Record<string, any> = {
+      event_id: e.event_id,
+      timestamp: e.timestamp,
+      caller_account: e.caller_account,
+      client_ip: e.client_ip || '127.0.0.1',
+      command: e.command,
+      target_dn: e.target_dn,
+      outcome: e.outcome,
+      status_code: e.status_code,
+      message: e.message,
+      duration_ms: e.duration_ms,
+      severity: isAlert ? 10 : e.severity ?? (e.outcome === 'SUCCESS' ? 3 : 7),
+      domain: e.domain || 'corp.acme.internal',
+      parameters: e.parameters,
+    };
+    if (isAlert) {
+      payload.threat = {
+        indicator: 'ROGUE_OR_HALLUCINATING_AGENT_DETECTED',
+        rule: e.alert_rule || 'ROGUE_AGENT_ALERT',
+        severity: 'CRITICAL',
+        risk_score: 100,
+        action: 'BLOCKED_TERMINATED',
+      };
+    }
+    const envelope = {
+      time: Number(epoch.toFixed(3)),
+      host: 'ad-proxy.corp.acme.internal',
+      source: 'ad-ldaps-proxy',
+      sourcetype: 'active_directory:proxy:audit',
+      index: 'active_directory',
+      event: payload,
+    };
+    return JSON.stringify(envelope, null, 2);
+  };
+
+  const toWazuhJson = (e: SiemEvent): string => {
+    const isAlert =
+      e.is_high_severity_alert ||
+      e.severity === 10 ||
+      e.outcome === 'SECURITY_ALERT_ROGUE_AGENT' ||
+      e.status_code === 'CRITICAL_SECURITY_ALERT';
+    const isSuccess = e.outcome === 'SUCCESS';
+    const ruleLevel = isAlert ? 12 : isSuccess ? 3 : 7;
+    const ruleId = isAlert ? '100201' : isSuccess ? '100200' : '100202';
+    const groups = ['active_directory', 'proxy'];
+    if (isAlert) groups.push('security_alert', 'threat_detection', 'rogue_agent');
+    else if (!isSuccess) groups.push('authentication_failed', 'access_denied');
+    else groups.push('audit');
+
+    const adProxyData: Record<string, any> = {
+      event_id: e.event_id,
+      caller_account: e.caller_account,
+      client_ip: e.client_ip || '127.0.0.1',
+      command: e.command,
+      outcome: e.outcome,
+      status_code: e.status_code,
+      target_dn: e.target_dn,
+      duration_ms: e.duration_ms,
+      domain: e.domain || 'corp.acme.internal',
+      parameters: e.parameters,
+    };
+    if (isAlert) {
+      adProxyData.threat = {
+        indicator: 'ROGUE_OR_HALLUCINATING_AGENT_DETECTED',
+        rule: e.alert_rule || 'ROGUE_AGENT_ALERT',
+        severity: 'CRITICAL',
+        risk_score: 100,
+        action: 'BLOCKED_TERMINATED',
+      };
+    }
+
+    const wazuhEvent = {
+      timestamp: e.timestamp,
+      agent: {
+        id: '000',
+        name: 'ad-proxy-gateway',
+        ip: e.client_ip || '127.0.0.1',
+      },
+      manager: {
+        name: 'wazuh-manager',
+      },
+      rule: {
+        id: ruleId,
+        level: ruleLevel,
+        description: `Active Directory LDAPS Proxy: ${e.command} - ${e.outcome} (${e.status_code})`,
+        groups,
+        firedtimes: 1,
+      },
+      decoder: {
+        name: 'ad_proxy_json',
+      },
+      data: {
+        ad_proxy: adProxyData,
+      },
+      location: 'active_directory_proxy',
+      full_log: `ActiveDirectoryProxy [${e.status_code}] caller='${e.caller_account}' cmd='${e.command}' outcome='${e.outcome}' target='${e.target_dn || 'N/A'}' msg='${e.message}'`,
+    };
+    return JSON.stringify(wazuhEvent, null, 2);
   };
 
   return (
@@ -359,32 +470,52 @@ export const SiemAuditStream: React.FC = () => {
 
             {/* Format toggle */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-300">Raw SIEM Payload</span>
-                <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded border border-slate-800">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <span className="font-semibold text-slate-300">Raw SIEM Payload Format</span>
+                <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded border border-slate-800 text-[11px]">
                   <button
                     onClick={() => setViewFormat('ecs')}
-                    className={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${
-                      viewFormat === 'ecs' ? 'bg-slate-800 text-white' : 'text-slate-400'
+                    className={`px-2 py-0.5 rounded cursor-pointer ${
+                      viewFormat === 'ecs' ? 'bg-slate-800 text-white font-medium' : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
                     ECS (JSON)
                   </button>
                   <button
                     onClick={() => setViewFormat('cef')}
-                    className={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${
-                      viewFormat === 'cef' ? 'bg-slate-800 text-white' : 'text-slate-400'
+                    className={`px-2 py-0.5 rounded cursor-pointer ${
+                      viewFormat === 'cef' ? 'bg-slate-800 text-white font-medium' : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    CEF (ArcSight/Splunk)
+                    CEF (Syslog)
+                  </button>
+                  <button
+                    onClick={() => setViewFormat('splunk')}
+                    className={`px-2 py-0.5 rounded cursor-pointer ${
+                      viewFormat === 'splunk' ? 'bg-emerald-900/60 text-emerald-200 font-medium border border-emerald-700/60' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Splunk (HEC)
+                  </button>
+                  <button
+                    onClick={() => setViewFormat('wazuh')}
+                    className={`px-2 py-0.5 rounded cursor-pointer ${
+                      viewFormat === 'wazuh' ? 'bg-blue-900/60 text-blue-200 font-medium border border-blue-700/60' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Wazuh (XDR)
                   </button>
                 </div>
               </div>
 
-              <pre className="p-3 bg-slate-950 border border-slate-800 rounded font-mono text-[11px] text-emerald-300 overflow-x-auto whitespace-pre-wrap">
+              <pre className="p-3 bg-slate-950 border border-slate-800 rounded font-mono text-[11px] text-emerald-300 overflow-x-auto whitespace-pre-wrap max-h-72">
                 {viewFormat === 'ecs'
                   ? JSON.stringify(selectedEvent, null, 2)
-                  : toCefFormat(selectedEvent)}
+                  : viewFormat === 'cef'
+                  ? toCefFormat(selectedEvent)
+                  : viewFormat === 'splunk'
+                  ? toSplunkHec(selectedEvent)
+                  : toWazuhJson(selectedEvent)}
               </pre>
             </div>
 

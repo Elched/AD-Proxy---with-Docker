@@ -195,7 +195,7 @@ app.get('/api/proxy/host-info', (_req, res) => {
       certs_ready: hasCerts,
       docker_image: 'ad-ldaps-proxy:1.0.0',
       port: 10636,
-      total_tests: 37,
+      total_tests: 43,
       security_baseline: 'CIS Docker Benchmark v1.6.0 & NIST SP 800-53',
     });
   });
@@ -263,8 +263,56 @@ app.get('/api/proxy/siem-logs', (_req, res) => {
         try {
           if (line.startsWith('{')) {
             const rawObj = JSON.parse(line);
-            // Normalize ECS JSON records into flat SiemEvent shape if needed
-            if (rawObj['@timestamp'] && rawObj.event) {
+            // 1. Normalize Wazuh native alert JSON records
+            if (rawObj.agent && rawObj.rule && rawObj.data?.ad_proxy) {
+              const ad = rawObj.data.ad_proxy;
+              events.push({
+                event_id: ad.event_id || rawObj.id,
+                timestamp: rawObj.timestamp,
+                caller_account: ad.caller_account || 'unknown',
+                client_ip: ad.client_ip || rawObj.agent?.ip || '127.0.0.1',
+                command: ad.command || 'unknown',
+                target_dn: ad.target_dn || null,
+                filter_string: ad.filter_string || null,
+                outcome: ad.outcome || 'SUCCESS',
+                status_code: ad.status_code || 'SUCCESS',
+                message: ad.message || rawObj.rule?.description || '',
+                duration_ms: ad.duration_ms ?? 0.5,
+                parameters: ad.parameters || {},
+                domain: ad.domain || 'corp.acme.internal',
+                severity: ad.severity ?? (rawObj.rule?.level >= 10 ? 10 : 3),
+                is_high_severity_alert:
+                  ad.is_high_severity_alert || rawObj.rule?.level >= 10 || Boolean(ad.threat),
+                alert_rule: ad.alert_rule || ad.threat?.rule || null,
+                threat: ad.threat || undefined,
+              });
+            }
+            // 2. Normalize Splunk HEC event records
+            else if (rawObj.sourcetype === 'active_directory:proxy:audit' && rawObj.event) {
+              const sp = rawObj.event;
+              events.push({
+                event_id: sp.event_id,
+                timestamp: sp.timestamp || new Date(rawObj.time * 1000).toISOString(),
+                caller_account: sp.caller_account || 'unknown',
+                client_ip: sp.client_ip || '127.0.0.1',
+                command: sp.command || 'unknown',
+                target_dn: sp.target_dn || null,
+                filter_string: sp.filter_string || null,
+                outcome: sp.outcome || 'SUCCESS',
+                status_code: sp.status_code || 'SUCCESS',
+                message: sp.message || '',
+                duration_ms: sp.duration_ms ?? 0.5,
+                parameters: sp.parameters || {},
+                domain: sp.domain || 'corp.acme.internal',
+                severity: sp.severity ?? 3,
+                is_high_severity_alert:
+                  sp.severity === 10 || sp.is_high_severity_alert || Boolean(sp.threat),
+                alert_rule: sp.alert_rule || sp.threat?.rule || null,
+                threat: sp.threat || undefined,
+              });
+            }
+            // 3. Normalize ECS JSON records
+            else if (rawObj['@timestamp'] && rawObj.event) {
               events.push({
                 event_id: rawObj.event.id,
                 timestamp: rawObj['@timestamp'],
@@ -321,13 +369,13 @@ app.post('/api/proxy/run-tests', (_req, res) => {
         ranMatches.length > 0
           ? ranMatches.reduce((acc, m) => acc + parseInt(m[1], 10), 0)
           : isPassing
-          ? 37
+          ? 43
           : 0;
       res.json({
         success: isPassing,
         output: rawOutput,
         passed_count: passedCount,
-        total_count: 37,
+        total_count: 43,
       });
     }
   );

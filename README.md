@@ -398,18 +398,38 @@ allowed_service_accounts:
 ```yaml
 siem:
   enabled: true
-  format: "ecs" # "ecs" (Elastic Common Schema JSON) | "cef" (ArcSight/Splunk) | "syslog_rfc5424"
+  format: "ecs" # "ecs" | "cef" | "splunk_hec" | "wazuh_json" | "syslog_rfc5424"
   destinations:
     - "file"
     - "stdout"
-    - "syslog"
-    - "webhook"
+    # - "syslog"
+    # - "webhook"
+    - "splunk"   # Forward directly to Splunk HTTP Event Collector (HEC)
+    - "wazuh"    # Forward directly to Wazuh SIEM/XDR (alerts file & daemon)
   log_file_path: "/var/log/ad-proxy/audit.log"
   syslog_host: "siem-collector.corp.acme.internal"
   syslog_port: 514
   syslog_protocol: "TCP" # UDP | TCP | TLS
-  webhook_url: "https://splunk-hec.corp.acme.internal:8088/services/collector/raw"
-  webhook_token: "${SPLUNK_HEC_TOKEN}"
+
+  # Splunk HEC (HTTP Event Collector) Configuration:
+  splunk:
+    enabled: true
+    hec_url: "https://splunk-hec.corp.acme.internal:8088/services/collector/event"
+    hec_token: "${SPLUNK_HEC_TOKEN}"
+    index: "active_directory"
+    source: "ad-ldaps-proxy"
+    sourcetype: "active_directory:proxy:audit"
+    verify_ssl: true
+
+  # Wazuh SIEM / XDR Configuration:
+  wazuh:
+    enabled: true
+    host: "wazuh-manager.corp.acme.internal"
+    port: 514
+    protocol: "UDP" # UDP | TCP
+    alerts_file: "/var/ossec/logs/alerts/ad_proxy_alerts.json" # Monitored by Wazuh agent localfile
+    agent_name: "ad-proxy-gateway"
+
   log_all_queries: true
 ```
 
@@ -616,6 +636,76 @@ CEF:0|EnterpriseSecurity|ActiveDirectoryProxy|1.0|CRITICAL_SECURITY_ALERT|reset_
 }
 ```
 
+### 5. Splunk HTTP Event Collector (HEC) JSON Format
+Splunk HEC expects a JSON envelope containing indexing metadata and event payload dispatched to `/services/collector/event` with `Authorization: Splunk <token>`:
+```json
+{
+  "time": 1731060957.123,
+  "host": "ad-proxy.corp.acme.internal",
+  "source": "ad-ldaps-proxy",
+  "sourcetype": "active_directory:proxy:audit",
+  "index": "active_directory",
+  "event": {
+    "event_id": "e9c9b323-f1c6-492c-828f-a4e513c598f3",
+    "timestamp": "2026-11-08T08:39:29.619814+00:00",
+    "caller_account": "ai-triage-agent",
+    "client_ip": "10.0.4.15",
+    "command": "list_group_members",
+    "target_dn": "VPN-Users",
+    "filter_string": null,
+    "outcome": "SUCCESS",
+    "status_code": "SUCCESS",
+    "duration_ms": 1.23,
+    "severity": 3,
+    "message": "Executed Active Directory LDAPS command 'list_group_members' successfully.",
+    "domain": "corp.acme.internal",
+    "parameters": { "group_name": "VPN-Users" }
+  }
+}
+```
+
+### 6. Wazuh XDR / SIEM Native JSON Alert Schema
+Wazuh ingestion schema compatible with Wazuh analysis engine rulesets (Rule Level 3 for informational operations, 7 for access denied, 12 for critical rogue agent threats) and `<localfile>` JSON log collection:
+```json
+{
+  "timestamp": "2026-11-08T08:39:29.619814+00:00",
+  "agent": {
+    "id": "000",
+    "name": "ad-proxy-gateway",
+    "ip": "10.0.4.15"
+  },
+  "manager": {
+    "name": "wazuh-manager"
+  },
+  "rule": {
+    "id": "100200",
+    "level": 3,
+    "description": "Active Directory LDAPS Proxy: list_group_members - SUCCESS (SUCCESS)",
+    "groups": ["active_directory", "proxy", "audit"],
+    "firedtimes": 1
+  },
+  "decoder": {
+    "name": "ad_proxy_json"
+  },
+  "data": {
+    "ad_proxy": {
+      "event_id": "e9c9b323-f1c6-492c-828f-a4e513c598f3",
+      "caller_account": "ai-triage-agent",
+      "client_ip": "10.0.4.15",
+      "command": "list_group_members",
+      "outcome": "SUCCESS",
+      "status_code": "SUCCESS",
+      "target_dn": "VPN-Users",
+      "duration_ms": 1.23,
+      "domain": "corp.acme.internal",
+      "parameters": { "group_name": "VPN-Users" }
+    }
+  },
+  "location": "active_directory_proxy",
+  "full_log": "ActiveDirectoryProxy [SUCCESS] caller='ai-triage-agent' cmd='list_group_members' outcome='SUCCESS' target='VPN-Users' msg='Executed Active Directory LDAPS command 'list_group_members' successfully.'"
+}
+```
+
 ---
 
 ## Rogue & Hallucinating Agent Detection Subsystem
@@ -634,6 +724,20 @@ When any heuristic triggers:
 2. An error log with `[HIGH SEVERITY SECURITY ALERT - ROGUE AGENT DETECTED]` is emitted to standard error and system logs.
 3. SIEM feeds receive Severity 10 CEF alerts and ECS records with `threat.indicator: ROGUE_OR_HALLUCINATING_AGENT_DETECTED`.
 4. The caller receives a `CRITICAL_SECURITY_ALERT` response.
+
+---
+
+## AI Agent Functionality Test Procedure
+
+For a complete step-by-step walkthrough covering:
+1. Creating an AI Agent service account in Active Directory (`svc-group-viewer-agent`).
+2. Locking down the policy in `ad_proxy/config.yaml` to view group members only (`list_group_members`).
+3. Testing authentication failure with wrong password.
+4. Testing authorization rejection with correct password but forbidden command.
+5. Testing authorized execution with correct password and allowed request, and inspecting the resulting SIEM, Splunk, and Wazuh log outputs.
+
+Please consult the dedicated guide:
+👉 **[`FUNCTIONALITY_TEST_PROCEDURE.md`](./FUNCTIONALITY_TEST_PROCEDURE.md)**
 
 ---
 

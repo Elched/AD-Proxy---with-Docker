@@ -95,6 +95,19 @@ export interface ParsedProxyConfig {
     format: string;
     destinations: string[];
     log_file_path: string;
+    splunk_forwarding?: {
+      enabled: boolean;
+      hec_url: string;
+      index: string;
+      sourcetype: string;
+    } | null;
+    wazuh_forwarding?: {
+      enabled: boolean;
+      host?: string;
+      port: number;
+      protocol: string;
+      alerts_file?: string;
+    } | null;
   };
   service_accounts: ServiceAccountPolicy[];
 }

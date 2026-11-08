@@ -239,6 +239,223 @@ class TestActiveDirectoryProxy(unittest.TestCase):
         acc.permitted_commands.remove("custom_ping_ou")
         registry.remove_command("custom_ping_ou")
 
+    def test_13_splunk_hec_log_formatting(self):
+        """Verifies SIEM formatting conforms to Splunk HTTP Event Collector (HEC) JSON schema."""
+        from ad_proxy.models import AuditEvent, AuditOutcome
+        sample_event = AuditEvent(
+            event_id="splunk-evt-101",
+            timestamp="2026-11-08T09:15:30Z",
+            caller_account="ai-triage-agent",
+            client_ip="10.0.8.22",
+            command="search_users",
+            target_dn="OU=Engineering,DC=corp,DC=acme,DC=internal",
+            filter_string="(&(objectCategory=person)(sAMAccountName=alex*))",
+            outcome=AuditOutcome.SUCCESS,
+            status_code="SUCCESS",
+            message="Search completed successfully",
+            duration_ms=4.82,
+            domain="corp.acme.internal",
+            parameters={"query": "alex"},
+        )
+        splunk_json_str = self.engine.siem._format_splunk_hec(sample_event)
+        data = json.loads(splunk_json_str)
+
+        # Splunk HEC envelope keys
+        self.assertIn("time", data)
+        self.assertIsInstance(data["time"], (int, float))
+        self.assertIn("host", data)
+        self.assertIn("source", data)
+        self.assertEqual(data["source"], "ad-ldaps-proxy")
+        self.assertIn("sourcetype", data)
+        self.assertEqual(data["sourcetype"], "active_directory:proxy:audit")
+        self.assertIn("index", data)
+        self.assertEqual(data["index"], "active_directory")
+
+        # Nested Splunk event payload
+        event_body = data["event"]
+        self.assertEqual(event_body["event_id"], "splunk-evt-101")
+        self.assertEqual(event_body["caller_account"], "ai-triage-agent")
+        self.assertEqual(event_body["command"], "search_users")
+        self.assertEqual(event_body["outcome"], "SUCCESS")
+        self.assertEqual(event_body["domain"], "corp.acme.internal")
+
+        # Test Splunk high-severity rogue agent threat enrichment
+        sample_rogue = AuditEvent(
+            event_id="splunk-rogue-102",
+            timestamp="2026-11-08T09:16:00Z",
+            caller_account="ai-triage-agent",
+            client_ip="10.0.8.22",
+            command="reset_password",
+            target_dn="administrator",
+            filter_string=None,
+            outcome=AuditOutcome.SECURITY_ALERT_ROGUE_AGENT,
+            status_code="CRITICAL_SECURITY_ALERT",
+            message="Rogue password reset blocked",
+            duration_ms=0.91,
+            domain="corp.acme.internal",
+            is_high_severity_alert=True,
+            alert_rule="ROGUE_AGENT_ADMIN_PASSWORD_RESET_ATTEMPT",
+        )
+        rogue_splunk_str = self.engine.siem._format_splunk_hec(sample_rogue)
+        rogue_data = json.loads(rogue_splunk_str)
+        self.assertIn("threat", rogue_data["event"])
+        self.assertEqual(rogue_data["event"]["threat"]["indicator"], "ROGUE_OR_HALLUCINATING_AGENT_DETECTED")
+        self.assertEqual(rogue_data["event"]["threat"]["severity"], "CRITICAL")
+        self.assertEqual(rogue_data["event"]["threat"]["risk_score"], 100)
+
+    def test_14_wazuh_json_log_formatting(self):
+        """Verifies SIEM formatting conforms to Wazuh native JSON alert schema and rule levels."""
+        from ad_proxy.models import AuditEvent, AuditOutcome
+        sample_event = AuditEvent(
+            event_id="wazuh-evt-201",
+            timestamp="2026-11-08T09:20:00Z",
+            caller_account="svc-it-helpdesk-agent",
+            client_ip="10.0.9.55",
+            command="unlock_account",
+            target_dn="CN=John Doe,OU=Users,DC=corp,DC=acme,DC=internal",
+            filter_string=None,
+            outcome=AuditOutcome.SUCCESS,
+            status_code="SUCCESS",
+            message="Account unlocked successfully",
+            duration_ms=15.1,
+            domain="corp.acme.internal",
+        )
+        wazuh_json_str = self.engine.siem._format_wazuh_json(sample_event)
+        data = json.loads(wazuh_json_str)
+
+        # Wazuh core schema verification
+        self.assertIn("timestamp", data)
+        self.assertIn("agent", data)
+        self.assertEqual(data["agent"]["name"], "ad-proxy-gateway")
+        self.assertIn("manager", data)
+        self.assertEqual(data["manager"]["name"], "wazuh-manager")
+        self.assertIn("rule", data)
+        self.assertEqual(data["rule"]["level"], 3)  # Info level for successful operation
+        self.assertIn("active_directory", data["rule"]["groups"])
+        self.assertIn("decoder", data)
+        self.assertEqual(data["decoder"]["name"], "ad_proxy_json")
+        self.assertIn("data", data)
+        self.assertIn("ad_proxy", data["data"])
+        self.assertEqual(data["data"]["ad_proxy"]["command"], "unlock_account")
+        self.assertIn("location", data)
+        self.assertIn("full_log", data)
+
+        # Test Wazuh rule level elevation on rogue agent critical alert (Rule Level 12)
+        sample_rogue = AuditEvent(
+            event_id="wazuh-rogue-202",
+            timestamp="2026-11-08T09:22:00Z",
+            caller_account="ai-triage-agent",
+            client_ip="10.0.9.55",
+            command="add_user_to_group",
+            target_dn="Domain Admins",
+            filter_string=None,
+            outcome=AuditOutcome.SECURITY_ALERT_ROGUE_AGENT,
+            status_code="CRITICAL_SECURITY_ALERT",
+            message="Tier-0 Domain Admins tampering attempt intercepted",
+            duration_ms=1.12,
+            domain="corp.acme.internal",
+            is_high_severity_alert=True,
+            alert_rule="ROGUE_AGENT_CRITICAL_GROUP_TARGET",
+        )
+        rogue_wazuh_str = self.engine.siem._format_wazuh_json(sample_rogue)
+        rogue_data = json.loads(rogue_wazuh_str)
+        self.assertEqual(rogue_data["rule"]["level"], 12)  # High security level in Wazuh
+        self.assertIn("rogue_agent", rogue_data["rule"]["groups"])
+        self.assertIn("threat", rogue_data["data"]["ad_proxy"])
+        self.assertEqual(rogue_data["data"]["ad_proxy"]["threat"]["indicator"], "ROGUE_OR_HALLUCINATING_AGENT_DETECTED")
+
+    def test_15_siem_splunk_and_wazuh_destination_dispatch(self):
+        """Verifies configured Splunk and Wazuh destinations process events without exception."""
+        from ad_proxy.models import AuditEvent, AuditOutcome, SiemConfig, SiemFormat, SplunkConfig, WazuhConfig
+        from ad_proxy.siem_logger import SiemAuditLogger
+
+        temp_wazuh_file = "./logs/test_wazuh_alerts.json"
+        siem_cfg = SiemConfig(
+            enabled=True,
+            format=SiemFormat.ECS,
+            destinations=["splunk", "wazuh"],
+            splunk=SplunkConfig(
+                enabled=True,
+                hec_url="https://127.0.0.1:8088/services/collector/event",
+                hec_token="test-token",
+                verify_ssl=False,
+            ),
+            wazuh=WazuhConfig(
+                enabled=True,
+                host=None,  # skip network socket in test, test localfile
+                alerts_file=temp_wazuh_file,
+            ),
+        )
+        logger = SiemAuditLogger(siem_cfg)
+        test_evt = AuditEvent(
+            event_id="dest-dispatch-301",
+            timestamp="2026-11-08T09:30:00Z",
+            caller_account="ai-triage-agent",
+            client_ip="127.0.0.1",
+            command="list_group_members",
+            target_dn="VPN-Users",
+            filter_string=None,
+            outcome=AuditOutcome.SUCCESS,
+            status_code="SUCCESS",
+            message="Test dispatch",
+            duration_ms=2.1,
+            domain="corp.acme.internal",
+        )
+        # Should not throw exception
+        logger.log(test_evt)
+        self.assertTrue(os.path.exists(temp_wazuh_file))
+        with open(temp_wazuh_file, "r", encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("dest-dispatch-301", content)
+        self.assertIn("ad_proxy_json", content)
+        # Clean up test file
+        try:
+            os.remove(temp_wazuh_file)
+        except Exception:
+            pass
+
+    def test_16_procedure_step1_wrong_password_authentication_failure(self):
+        """Test Procedure Step 1: Verify AI agent with wrong password fails authentication."""
+        req = ProxyRequest(
+            caller_account="svc-group-viewer-agent",
+            caller_password="BadPassword999!",
+            command="list_group_members",
+            parameters={"group_name": "VPN-Users"},
+        )
+        res = self.engine.process_request(req)
+        self.assertFalse(res.success)
+        self.assertEqual(res.status_code, "AUTHENTICATION_FAILED")
+        self.assertIn("Invalid Active Directory credentials", res.message)
+
+    def test_17_procedure_step2_correct_password_forbidden_request(self):
+        """Test Procedure Step 2: Verify AI agent with correct password but forbidden request is blocked."""
+        # svc-group-viewer-agent is ONLY permitted 'list_group_members'. Attempting 'search_users' is forbidden.
+        req = ProxyRequest(
+            caller_account="svc-group-viewer-agent",
+            caller_password="GroupViewerSecret2026!",
+            command="search_users",
+            parameters={"query": "alex"},
+        )
+        res = self.engine.process_request(req)
+        self.assertFalse(res.success)
+        self.assertEqual(res.status_code, "FORBIDDEN")
+        self.assertTrue("explicitly denied" in res.message or "not permitted" in res.message)
+
+    def test_18_procedure_step3_correct_password_allowed_group_view_request(self):
+        """Test Procedure Step 3: Verify AI agent with correct password and allowed request succeeds."""
+        req = ProxyRequest(
+            caller_account="svc-group-viewer-agent",
+            caller_password="GroupViewerSecret2026!",
+            command="list_group_members",
+            parameters={"group_name": "VPN-Users"},
+        )
+        res = self.engine.process_request(req)
+        self.assertTrue(res.success)
+        self.assertEqual(res.status_code, "SUCCESS")
+        self.assertIsInstance(res.data, list)
+        self.assertTrue(len(res.data) >= 1)
+        self.assertEqual(res.data[0]["displayName"], "Alex Rivera")
+
 
 def run_all_tests() -> bool:
     loader = unittest.TestLoader()

@@ -16,8 +16,10 @@ from .models import (
     SecretProvider,
     SiemConfig,
     SiemFormat,
+    SplunkConfig,
     TlsSettings,
     UpstreamAuthConfig,
+    WazuhConfig,
 )
 
 
@@ -303,8 +305,42 @@ def build_proxy_config(raw: Dict[str, Any]) -> ProxyConfig:
         siem_format = SiemFormat.CEF
     elif fmt_str in ("syslog", "syslog_rfc5424"):
         siem_format = SiemFormat.SYSLOG
+    elif fmt_str in ("splunk", "splunk_hec"):
+        siem_format = SiemFormat.SPLUNK_HEC
+    elif fmt_str in ("wazuh", "wazuh_json"):
+        siem_format = SiemFormat.WAZUH_JSON
     else:
         siem_format = SiemFormat.ECS
+
+    splunk_raw = siem_raw.get("splunk")
+    splunk_config = None
+    if splunk_raw:
+        splunk_config = SplunkConfig(
+            enabled=bool(splunk_raw.get("enabled", True)),
+            hec_url=splunk_raw.get("hec_url", "https://splunk-hec.corp.acme.internal:8088/services/collector/event"),
+            hec_token=splunk_raw.get("hec_token"),
+            index=splunk_raw.get("index", "active_directory"),
+            source=splunk_raw.get("source", "ad-ldaps-proxy"),
+            sourcetype=splunk_raw.get("sourcetype", "active_directory:proxy:audit"),
+            verify_ssl=bool(splunk_raw.get("verify_ssl", False)),
+            timeout_seconds=float(splunk_raw.get("timeout_seconds", 3.0)),
+        )
+
+    wazuh_raw = siem_raw.get("wazuh")
+    wazuh_config = None
+    if wazuh_raw:
+        wazuh_config = WazuhConfig(
+            enabled=bool(wazuh_raw.get("enabled", True)),
+            host=wazuh_raw.get("host", "wazuh-manager.corp.acme.internal"),
+            port=int(wazuh_raw.get("port", 514)),
+            protocol=wazuh_raw.get("protocol", "UDP").upper(),
+            alerts_file=wazuh_raw.get("alerts_file", "./logs/wazuh_alerts.json"),
+            agent_name=wazuh_raw.get("agent_name", "ad-proxy-gateway"),
+            agent_id=wazuh_raw.get("agent_id", "000"),
+            manager_name=wazuh_raw.get("manager_name", "wazuh-manager"),
+            location=wazuh_raw.get("location", "active_directory_proxy"),
+            timeout_seconds=float(wazuh_raw.get("timeout_seconds", 3.0)),
+        )
 
     siem_config = SiemConfig(
         enabled=bool(siem_raw.get("enabled", True)),
@@ -316,6 +352,8 @@ def build_proxy_config(raw: Dict[str, Any]) -> ProxyConfig:
         syslog_protocol=siem_raw.get("syslog_protocol", "UDP").upper(),
         webhook_url=siem_raw.get("webhook_url"),
         webhook_token=siem_raw.get("webhook_token"),
+        splunk=splunk_config,
+        wazuh=wazuh_config,
         log_all_queries=bool(siem_raw.get("log_all_queries", True)),
     )
 

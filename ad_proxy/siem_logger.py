@@ -68,6 +68,10 @@ class SiemAuditLogger:
                 self._send_syslog(formatted_str)
             elif dest_lower == "webhook":
                 self._send_webhook(event_dict)
+            elif dest_lower in ("splunk", "splunk_hec"):
+                self._send_splunk(event)
+            elif dest_lower in ("wazuh", "wazuh_json"):
+                self._send_wazuh(event)
 
     def get_recent_events(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Returns in-memory audit log stream."""
@@ -99,6 +103,10 @@ class SiemAuditLogger:
             return self._format_cef(e)
         elif self.config.format == SiemFormat.SYSLOG:
             return self._format_syslog_rfc5424(e)
+        elif self.config.format == SiemFormat.SPLUNK_HEC:
+            return self._format_splunk_hec(e)
+        elif self.config.format == SiemFormat.WAZUH_JSON:
+            return self._format_wazuh_json(e)
         else:
             return self._format_ecs(e)
 
@@ -264,3 +272,182 @@ class SiemAuditLogger:
                 _ = resp.read()
         except Exception as e:
             logger.debug("Webhook SIEM forward to %s failed: %s", self.config.webhook_url, e)
+
+    def _format_splunk_hec(self, e: AuditEvent) -> str:
+        """
+        Splunk HTTP Event Collector (HEC) JSON Event Format:
+        {
+          "time": <epoch_seconds>,
+          "host": "<hostname>",
+          "source": "ad-ldaps-proxy",
+          "sourcetype": "active_directory:proxy:audit",
+          "index": "active_directory",
+          "event": { ... }
+        }
+        """
+        try:
+            ts_str = e.timestamp or datetime.now(timezone.utc).isoformat()
+            dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            epoch_time = dt.timestamp()
+        except Exception:
+            epoch_time = datetime.now(timezone.utc).timestamp()
+
+        splunk_cfg = self.config.splunk
+        host_val = socket.gethostname()
+        source_val = splunk_cfg.source if splunk_cfg else "ad-ldaps-proxy"
+        sourcetype_val = splunk_cfg.sourcetype if splunk_cfg else "active_directory:proxy:audit"
+        index_val = splunk_cfg.index if splunk_cfg else "active_directory"
+
+        event_payload = self._to_event_dict(e)
+        if getattr(e, "is_high_severity_alert", False):
+            event_payload["threat"] = {
+                "indicator": "ROGUE_OR_HALLUCINATING_AGENT_DETECTED",
+                "rule": getattr(e, "alert_rule", "ROGUE_AGENT_ALERT"),
+                "severity": "CRITICAL",
+                "risk_score": 100,
+                "action": "BLOCKED_TERMINATED",
+            }
+
+        splunk_envelope = {
+            "time": round(epoch_time, 3),
+            "host": host_val,
+            "source": source_val,
+            "sourcetype": sourcetype_val,
+            "index": index_val,
+            "event": event_payload,
+        }
+        return json.dumps(splunk_envelope, separators=(",", ":"))
+
+    def _format_wazuh_json(self, e: AuditEvent) -> str:
+        """
+        Wazuh SIEM / XDR JSON Alert & Decoded Event Schema:
+        Conforms to Wazuh analysis engine standards (agent, manager, rule, decoder, data, location, full_log).
+        """
+        wazuh_cfg = self.config.wazuh
+        is_alert = getattr(e, "is_high_severity_alert", False) or e.outcome == AuditOutcome.SECURITY_ALERT_ROGUE_AGENT
+        is_success = e.outcome == AuditOutcome.SUCCESS
+
+        # Wazuh Rule Levels: 3 (info), 7 (warning/policy violation), 12 (critical security threat)
+        rule_level = 12 if is_alert else (3 if is_success else 7)
+        rule_id = "100201" if is_alert else ("100200" if is_success else "100202")
+
+        groups = ["active_directory", "proxy"]
+        if is_alert:
+            groups.extend(["security_alert", "threat_detection", "rogue_agent"])
+        elif not is_success:
+            groups.extend(["authentication_failed", "access_denied"])
+        else:
+            groups.append("audit")
+
+        agent_id = wazuh_cfg.agent_id if wazuh_cfg else "000"
+        agent_name = wazuh_cfg.agent_name if wazuh_cfg else "ad-proxy-gateway"
+        manager_name = wazuh_cfg.manager_name if wazuh_cfg else "wazuh-manager"
+        location = wazuh_cfg.location if wazuh_cfg else "active_directory_proxy"
+
+        data_payload = self._to_event_dict(e)
+        if is_alert:
+            data_payload["threat"] = {
+                "indicator": "ROGUE_OR_HALLUCINATING_AGENT_DETECTED",
+                "rule": getattr(e, "alert_rule", "ROGUE_AGENT_ALERT"),
+                "severity": "CRITICAL",
+                "risk_score": 100,
+                "action": "BLOCKED_TERMINATED",
+            }
+
+        wazuh_event = {
+            "timestamp": e.timestamp or datetime.now(timezone.utc).isoformat(),
+            "agent": {
+                "id": agent_id,
+                "name": agent_name,
+                "ip": e.client_ip or "127.0.0.1",
+            },
+            "manager": {
+                "name": manager_name,
+            },
+            "rule": {
+                "id": rule_id,
+                "level": rule_level,
+                "description": f"Active Directory LDAPS Proxy: {e.command} - {e.outcome.value} ({e.status_code})",
+                "groups": groups,
+                "firedtimes": 1,
+            },
+            "decoder": {
+                "name": "ad_proxy_json",
+            },
+            "data": {
+                "ad_proxy": data_payload,
+            },
+            "location": location,
+            "full_log": f"ActiveDirectoryProxy [{e.status_code}] caller='{e.caller_account}' cmd='{e.command}' outcome='{e.outcome.value}' target='{e.target_dn or 'N/A'}' msg='{e.message}'",
+        }
+        return json.dumps(wazuh_event, separators=(",", ":"))
+
+    def _send_splunk(self, e: AuditEvent):
+        """Forwards formatted event to Splunk HTTP Event Collector (HEC)."""
+        splunk_cfg = self.config.splunk
+        hec_url = (splunk_cfg.hec_url if splunk_cfg else None) or self.config.webhook_url
+        token = (splunk_cfg.hec_token if splunk_cfg else None) or self.config.webhook_token
+        if not hec_url:
+            return
+
+        payload_str = self._format_splunk_hec(e)
+        headers = {"Content-Type": "application/json"}
+        if token:
+            # Splunk HEC standard authorization
+            headers["Authorization"] = f"Splunk {token}"
+
+        try:
+            ctx = None
+            if splunk_cfg and not splunk_cfg.verify_ssl and hec_url.startswith("https://"):
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+
+            req = urllib.request.Request(
+                hec_url,
+                data=payload_str.encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            timeout = splunk_cfg.timeout_seconds if splunk_cfg else 3.0
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                _ = resp.read()
+        except Exception as ex:
+            logger.debug("Splunk HEC forwarding to %s failed: %s", hec_url, ex)
+
+    def _send_wazuh(self, e: AuditEvent):
+        """Forwards formatted event to Wazuh (via monitored alert file and/or syslog socket)."""
+        wazuh_cfg = self.config.wazuh
+        payload_str = self._format_wazuh_json(e)
+
+        # 1. Monitored alert file ingestion (standard Wazuh localfile JSON collection)
+        alerts_file = (wazuh_cfg.alerts_file if wazuh_cfg else None) or "./logs/wazuh_alerts.json"
+        if alerts_file:
+            try:
+                dir_path = os.path.dirname(alerts_file)
+                if dir_path:
+                    os.makedirs(dir_path, exist_ok=True)
+                with open(alerts_file, "a", encoding="utf-8") as f:
+                    f.write(payload_str + "\n")
+            except Exception as ex:
+                logger.debug("Wazuh alerts file write to %s failed: %s", alerts_file, ex)
+
+        # 2. Network socket transmission to Wazuh manager if host configured
+        if wazuh_cfg and wazuh_cfg.host:
+            host = wazuh_cfg.host
+            port = wazuh_cfg.port or 514
+            proto = (wazuh_cfg.protocol or "UDP").upper()
+            try:
+                data = (payload_str + "\n").encode("utf-8")
+                if proto == "UDP":
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    sock.sendto(data, (host, port))
+                    sock.close()
+                elif proto == "TCP":
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(wazuh_cfg.timeout_seconds or 3.0)
+                    sock.connect((host, port))
+                    sock.sendall(data)
+                    sock.close()
+            except Exception as ex:
+                logger.debug("Wazuh manager network export to %s:%d failed: %s", host, port, ex)

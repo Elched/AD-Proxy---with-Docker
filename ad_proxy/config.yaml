@@ -152,12 +152,41 @@ allowed_service_accounts:
       - "disable_account"
       - "reset_password"
 
+  # Group Membership Viewer AI Agent (Restricted to viewing group members)
+  - account_identifier: "svc-group-viewer-agent"
+    description: "AI Agent restricted strictly to viewing users in Active Directory groups"
+    permitted_commands:
+      - "list_group_members"
+    denied_commands:
+      - "search_users"
+      - "get_user_attributes"
+      - "add_user_to_group"
+      - "remove_user_from_group"
+      - "enable_account"
+      - "disable_account"
+      - "unlock_account"
+      - "reset_password"
+      - "custom_search_filter"
+    rules:
+      - command: "list_group_members"
+        allowed_groups:
+          - "VPN-Users"
+          - "Developers"
+          - "Helpdesk-Tier1"
+        restricted_groups:
+          - "Domain Admins"
+          - "Enterprise Admins"
+          - "Schema Admins"
+          - "Administrators"
+
 # ------------------------------------------------------------------------------
 # 5. SIEM & Audit Logging Configuration
 # ------------------------------------------------------------------------------
 # Standard formats:
 #   format: "ecs"            -> Elastic Common Schema (JSON)
-#   format: "cef"            -> Common Event Format (ArcSight, Splunk, QRadar)
+#   format: "cef"            -> Common Event Format (ArcSight, Micro Focus, QRadar)
+#   format: "splunk_hec"     -> Splunk HTTP Event Collector JSON Event Format
+#   format: "wazuh_json"     -> Wazuh XDR/SIEM Native JSON Alert Schema
 #   format: "syslog_rfc5424" -> RFC 5424 Syslog
 siem:
   enabled: true
@@ -167,12 +196,39 @@ siem:
     - "stdout"
     # - "syslog"
     # - "webhook"
+    # - "splunk"
+    # - "wazuh"
   log_file_path: "./logs/audit.log"
   syslog_host: "siem-collector.corp.acme.internal"
   syslog_port: 514
   syslog_protocol: "UDP" # UDP | TCP | TLS
-  webhook_url: "https://splunk-hec.corp.acme.internal:8088/services/collector/raw"
-  webhook_token: "${SPLUNK_HEC_TOKEN}"
+  webhook_url: "https://siem-gateway.corp.acme.internal/api/audit"
+  webhook_token: "${SIEM_WEBHOOK_TOKEN:-}"
+
+  # Splunk HEC (HTTP Event Collector) Forwarding Configuration:
+  splunk:
+    enabled: true
+    hec_url: "https://splunk-hec.corp.acme.internal:8088/services/collector/event"
+    hec_token: "${SPLUNK_HEC_TOKEN:-dev-splunk-hec-token-2026}"
+    index: "active_directory"
+    source: "ad-ldaps-proxy"
+    sourcetype: "active_directory:proxy:audit"
+    verify_ssl: false
+    timeout_seconds: 3.0
+
+  # Wazuh SIEM / XDR Ingestion Configuration:
+  wazuh:
+    enabled: true
+    host: "wazuh-manager.corp.acme.internal"
+    port: 514
+    protocol: "UDP" # UDP | TCP
+    alerts_file: "./logs/wazuh_alerts.json" # Monitored by Wazuh agent localfile
+    agent_name: "ad-proxy-gateway"
+    agent_id: "000"
+    manager_name: "wazuh-manager"
+    location: "active_directory_proxy"
+    timeout_seconds: 3.0
+
   log_all_queries: true
 
 # ------------------------------------------------------------------------------

@@ -85,7 +85,9 @@ export const PolicyManager: React.FC<PolicyManagerProps> = ({ onConfigUpdated })
   };
 
   // Helper to quickly toggle YAML fields without manual searching
-  const applyQuickSetting = (type: 'auth_openbao' | 'auth_gmsa' | 'auth_env' | 'siem_ecs' | 'siem_cef') => {
+  const applyQuickSetting = (
+    type: 'auth_openbao' | 'auth_gmsa' | 'auth_env' | 'siem_ecs' | 'siem_cef' | 'siem_splunk' | 'siem_wazuh'
+  ) => {
     let updated = yamlContent;
     if (type === 'auth_openbao') {
       updated = updated
@@ -100,9 +102,23 @@ export const PolicyManager: React.FC<PolicyManagerProps> = ({ onConfigUpdated })
         .replace(/mode:\s*"(gmsa|service_account)"/, 'mode: "service_account"')
         .replace(/secret_provider:\s*"(env|openbao|vault|none)"/, 'secret_provider: "env"');
     } else if (type === 'siem_ecs') {
-      updated = updated.replace(/format:\s*"(ecs|cef|syslog_rfc5424)"/, 'format: "ecs"');
+      updated = updated.replace(/format:\s*"(ecs|cef|splunk_hec|wazuh_json|syslog_rfc5424)"/, 'format: "ecs"');
     } else if (type === 'siem_cef') {
-      updated = updated.replace(/format:\s*"(ecs|cef|syslog_rfc5424)"/, 'format: "cef"');
+      updated = updated.replace(/format:\s*"(ecs|cef|splunk_hec|wazuh_json|syslog_rfc5424)"/, 'format: "cef"');
+    } else if (type === 'siem_splunk') {
+      updated = updated.replace(/format:\s*"(ecs|cef|splunk_hec|wazuh_json|syslog_rfc5424)"/, 'format: "splunk_hec"');
+      if (!updated.includes('- "splunk"') && !updated.includes("- 'splunk'")) {
+        updated = updated.replace(/destinations:\s*\n(\s*-\s*"[^"]+"\s*\n)+/, (match) => {
+          return match + '    - "splunk"\n';
+        });
+      }
+    } else if (type === 'siem_wazuh') {
+      updated = updated.replace(/format:\s*"(ecs|cef|splunk_hec|wazuh_json|syslog_rfc5424)"/, 'format: "wazuh_json"');
+      if (!updated.includes('- "wazuh"') && !updated.includes("- 'wazuh'")) {
+        updated = updated.replace(/destinations:\s*\n(\s*-\s*"[^"]+"\s*\n)+/, (match) => {
+          return match + '    - "wazuh"\n';
+        });
+      }
     }
     setYamlContent(updated);
     setStatusMessage({
@@ -218,13 +234,24 @@ export const PolicyManager: React.FC<PolicyManagerProps> = ({ onConfigUpdated })
                 <span>SIEM & Zero-Trust Guard</span>
               </div>
               <div className="text-sm font-bold text-white">
-                Format: {siem?.format?.toUpperCase() || 'ECS'} · Tier-0 Guard Active
+                Format: {siem?.format?.toUpperCase() || 'ECS'} · Forwarding Active
               </div>
-              <div className="text-xs text-slate-400 mt-1">
-                Destinations: <span className="font-mono">{siem?.destinations?.join(', ') || 'file, stdout'}</span>
+              <div className="text-xs text-slate-400 mt-1 truncate">
+                Destinations: <span className="font-mono text-slate-200">{siem?.destinations?.join(', ') || 'file, stdout'}</span>
               </div>
-              <div className="text-xs text-slate-500 mt-0.5">
-                Domain Admins & Schema Admins strictly isolated
+              <div className="text-[11px] text-slate-400 mt-1 space-y-0.5">
+                <div>
+                  Splunk HEC:{' '}
+                  <span className="text-emerald-400 font-mono">
+                    {siem?.destinations?.includes('splunk') ? 'Active Forwarder' : 'Configured (Standby)'}
+                  </span>
+                </div>
+                <div>
+                  Wazuh XDR:{' '}
+                  <span className="text-blue-400 font-mono">
+                    {siem?.destinations?.includes('wazuh') ? 'Active Forwarder' : 'Configured (Standby)'}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -365,6 +392,20 @@ export const PolicyManager: React.FC<PolicyManagerProps> = ({ onConfigUpdated })
                 className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-[11px] cursor-pointer"
               >
                 SIEM: ArcSight CEF
+              </button>
+              <button
+                type="button"
+                onClick={() => applyQuickSetting('siem_splunk')}
+                className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-800/80 text-[11px] cursor-pointer"
+              >
+                SIEM: Splunk HEC
+              </button>
+              <button
+                type="button"
+                onClick={() => applyQuickSetting('siem_wazuh')}
+                className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-blue-300 border border-blue-800/80 text-[11px] cursor-pointer"
+              >
+                SIEM: Wazuh JSON
               </button>
             </div>
           </div>

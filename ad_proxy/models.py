@@ -25,6 +25,8 @@ class SiemFormat(str, Enum):
     CEF = "cef"
     ECS = "ecs"
     SYSLOG = "syslog_rfc5424"
+    SPLUNK_HEC = "splunk_hec"
+    WAZUH_JSON = "wazuh_json"
 
 
 class AuditOutcome(str, Enum):
@@ -114,6 +116,32 @@ class AllowedServiceAccount:
 
 
 @dataclass
+class SplunkConfig:
+    enabled: bool = True
+    hec_url: str = "https://splunk-hec.corp.acme.internal:8088/services/collector/event"
+    hec_token: Optional[str] = None
+    index: str = "active_directory"
+    source: str = "ad-ldaps-proxy"
+    sourcetype: str = "active_directory:proxy:audit"
+    verify_ssl: bool = False
+    timeout_seconds: float = 3.0
+
+
+@dataclass
+class WazuhConfig:
+    enabled: bool = True
+    host: Optional[str] = "wazuh-manager.corp.acme.internal"
+    port: int = 514
+    protocol: str = "UDP"  # UDP | TCP
+    alerts_file: str = "./logs/wazuh_alerts.json"
+    agent_name: str = "ad-proxy-gateway"
+    agent_id: str = "000"
+    manager_name: str = "wazuh-manager"
+    location: str = "active_directory_proxy"
+    timeout_seconds: float = 3.0
+
+
+@dataclass
 class SiemConfig:
     enabled: bool = True
     format: SiemFormat = SiemFormat.ECS
@@ -124,6 +152,8 @@ class SiemConfig:
     syslog_protocol: str = "UDP"  # UDP | TCP | TLS
     webhook_url: Optional[str] = None
     webhook_token: Optional[str] = None
+    splunk: Optional[SplunkConfig] = None
+    wazuh: Optional[WazuhConfig] = None
     log_all_queries: bool = True
 
 

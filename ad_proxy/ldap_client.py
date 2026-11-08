@@ -197,9 +197,15 @@ class ActiveDirectoryLdapClient:
         member_users: List[Dict[str, Any]] = []
 
         for member_dn in members_list:
-            # Extract sAMAccountName from DN
-            cn_part = member_dn.split(",")[0].replace("CN=", "").strip().lower()
-            u = self._mock_directory.get("users", {}).get(cn_part)
+            # Extract sAMAccountName or CN from DN
+            cn_part = member_dn.split(",")[0].replace("CN=", "").strip()
+            cn_key = cn_part.lower()
+            u = self._mock_directory.get("users", {}).get(cn_key)
+            if not u:
+                for _, u_cand in self._mock_directory.get("users", {}).items():
+                    if u_cand.get("displayName", "").lower() == cn_key or u_cand.get("sAMAccountName", "").lower() == cn_key:
+                        u = u_cand
+                        break
             if u:
                 member_users.append(self._filter_attributes(u, attributes))
             else:
@@ -329,6 +335,20 @@ class ActiveDirectoryLdapClient:
                     "distinguishedName": f"CN=svc-it-helpdesk-agent,OU=ServiceAccounts,{base}",
                     "userAccountControl": 512,
                     "password": "HelpdeskSecretToken2026#",
+                    "disabled": False,
+                    "locked": False,
+                    "memberOf": [f"CN=AI-Service-Accounts,OU=Groups,{base}"],
+                },
+                "svc-group-viewer-agent": {
+                    "sAMAccountName": "svc-group-viewer-agent",
+                    "userPrincipalName": f"svc-group-viewer-agent@{self.config.domain_name}",
+                    "displayName": "Group Membership Viewer AI Agent",
+                    "mail": f"group-viewer@{self.config.domain_name}",
+                    "department": "Security Auditing",
+                    "title": "AI Group Auditor Bot",
+                    "distinguishedName": f"CN=svc-group-viewer-agent,OU=ServiceAccounts,{base}",
+                    "userAccountControl": 512,
+                    "password": "GroupViewerSecret2026!",
                     "disabled": False,
                     "locked": False,
                     "memberOf": [f"CN=AI-Service-Accounts,OU=Groups,{base}"],

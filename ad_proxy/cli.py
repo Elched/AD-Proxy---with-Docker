@@ -83,6 +83,19 @@ def serialize_config_summary(config: ProxyConfig, config_path: str) -> Dict[str,
         "siem_enabled": config.siem.enabled,
         "siem_format": config.siem.format.value,
         "siem_destinations": config.siem.destinations,
+        "splunk_forwarding": {
+            "enabled": config.siem.splunk.enabled if config.siem.splunk else False,
+            "hec_url": config.siem.splunk.hec_url if config.siem.splunk else None,
+            "index": config.siem.splunk.index if config.siem.splunk else "active_directory",
+            "sourcetype": config.siem.splunk.sourcetype if config.siem.splunk else "active_directory:proxy:audit",
+        } if config.siem.splunk else None,
+        "wazuh_forwarding": {
+            "enabled": config.siem.wazuh.enabled if config.siem.wazuh else False,
+            "host": config.siem.wazuh.host if config.siem.wazuh else None,
+            "port": config.siem.wazuh.port if config.siem.wazuh else 514,
+            "protocol": config.siem.wazuh.protocol if config.siem.wazuh else "UDP",
+            "alerts_file": config.siem.wazuh.alerts_file if config.siem.wazuh else None,
+        } if config.siem.wazuh else None,
         "listen_host": config.listen_host,
         "listen_port": config.listen_port,
         "service_accounts": accounts,
@@ -93,15 +106,23 @@ def format_check_output(config: ProxyConfig, config_path: str) -> str:
     """Builds a human-readable validation report for the parsed configuration."""
     lines = [
         f"[OK] Configuration successfully parsed from: {config_path}",
-        f"  - Active Directory Domain:   {config.active_directory.domain_name}",
-        f"  - Base DN:                   {config.active_directory.base_dn}",
-        f"  - Domain Controllers:        {', '.join(config.active_directory.domain_controllers)}",
-        f"  - Upstream Auth Mode:        {config.upstream_auth.mode.value}",
-        f"  - Secret Provider:           {config.upstream_auth.secret_provider.value}",
-        f"  - SIEM Format:               {config.siem.format.value}",
-        f"  - SIEM Destinations:         {', '.join(config.siem.destinations)}",
-        f"  - Registered Service Accounts: {len(config.allowed_service_accounts)}",
+        f"  - Active Directory Domain:     {config.active_directory.domain_name}",
+        f"  - Base DN:                     {config.active_directory.base_dn}",
+        f"  - Domain Controllers:          {', '.join(config.active_directory.domain_controllers)}",
+        f"  - Upstream Auth Mode:          {config.upstream_auth.mode.value}",
+        f"  - Secret Provider:             {config.upstream_auth.secret_provider.value}",
+        f"  - SIEM Format:                 {config.siem.format.value}",
+        f"  - SIEM Destinations:           {', '.join(config.siem.destinations)}",
     ]
+    if config.siem.splunk and config.siem.splunk.enabled:
+        lines.append(
+            f"  - Splunk HEC Forwarder:        Enabled -> {config.siem.splunk.hec_url} (Index: {config.siem.splunk.index})"
+        )
+    if config.siem.wazuh and config.siem.wazuh.enabled:
+        lines.append(
+            f"  - Wazuh XDR/SIEM Forwarder:    Enabled -> Host: {config.siem.wazuh.host}:{config.siem.wazuh.port} | Alert Log: {config.siem.wazuh.alerts_file}"
+        )
+    lines.append(f"  - Registered Service Accounts: {len(config.allowed_service_accounts)}")
     for acc in config.allowed_service_accounts.values():
         lines.append(
             f"     * {acc.account_identifier} ({acc.description}) -> Permitted: {len(acc.permitted_commands)} commands"
