@@ -5,13 +5,14 @@ verifying Domain Controller LDAPS connectivity, simulating AI agent requests, an
 """
 
 import argparse
+import base64
 import json
 import logging
 import os
 import sys
 from typing import Any, Dict
 from .commands import registry
-from .models import ProxyRequest
+from .models import ProxyConfig, ProxyRequest
 from .proxy_engine import AdProxyEngine
 from .server import AdProxyServer
 from .yaml_loader import build_proxy_config, load_yaml_raw
@@ -25,14 +26,13 @@ logger = logging.getLogger("ad_proxy.cli")
 
 
 def parse_cli_params(param_list: list) -> Dict[str, Any]:
-    """Parses key=value arguments from CLI."""
+    """Parses key=value arguments from CLI into typed Python primitives."""
     params: Dict[str, Any] = {}
     if not param_list:
         return params
     for p in param_list:
         if "=" in p:
             k, v = p.split("=", 1)
-            # handle booleans and ints
             if v.lower() == "true":
                 params[k] = True
             elif v.lower() == "false":
@@ -44,6 +44,69 @@ def parse_cli_params(param_list: list) -> Dict[str, Any]:
         else:
             params[p] = True
     return params
+
+
+def serialize_config_summary(config: ProxyConfig, config_path: str) -> Dict[str, Any]:
+    """Serializes the active ProxyConfig into a structured dictionary for UI and CLI inspection."""
+    accounts = []
+    for acc in config.allowed_service_accounts.values():
+        rules = [
+            {
+                "command": r.command,
+                "allowed_groups": r.allowed_groups or [],
+                "restricted_groups": r.restricted_groups or [],
+                "allowed_ous": r.allowed_ous or [],
+                "allowed_attributes": r.allowed_attributes or [],
+                "max_search_results": r.max_search_results,
+                "require_approval_ticket": r.require_approval_ticket,
+            }
+            for r in acc.rules
+        ]
+        accounts.append({
+            "account_identifier": acc.account_identifier,
+            "description": acc.description,
+            "permitted_commands": acc.permitted_commands,
+            "denied_commands": acc.denied_commands,
+            "rules": rules,
+        })
+
+    return {
+        "config_path": config_path,
+        "domain_name": config.active_directory.domain_name,
+        "base_dn": config.active_directory.base_dn,
+        "domain_controllers": config.active_directory.domain_controllers,
+        "ldaps_port": config.active_directory.ldaps_port,
+        "tls_min_version": config.ldaps.min_version,
+        "auth_mode": config.upstream_auth.mode.value,
+        "secret_provider": config.upstream_auth.secret_provider.value,
+        "gmsa_name": config.upstream_auth.gmsa_name,
+        "siem_enabled": config.siem.enabled,
+        "siem_format": config.siem.format.value,
+        "siem_destinations": config.siem.destinations,
+        "listen_host": config.listen_host,
+        "listen_port": config.listen_port,
+        "service_accounts": accounts,
+    }
+
+
+def format_check_output(config: ProxyConfig, config_path: str) -> str:
+    """Builds a human-readable validation report for the parsed configuration."""
+    lines = [
+        f"[OK] Configuration successfully parsed from: {config_path}",
+        f"  - Active Directory Domain:   {config.active_directory.domain_name}",
+        f"  - Base DN:                   {config.active_directory.base_dn}",
+        f"  - Domain Controllers:        {', '.join(config.active_directory.domain_controllers)}",
+        f"  - Upstream Auth Mode:        {config.upstream_auth.mode.value}",
+        f"  - Secret Provider:           {config.upstream_auth.secret_provider.value}",
+        f"  - SIEM Format:               {config.siem.format.value}",
+        f"  - SIEM Destinations:         {', '.join(config.siem.destinations)}",
+        f"  - Registered Service Accounts: {len(config.allowed_service_accounts)}",
+    ]
+    for acc in config.allowed_service_accounts.values():
+        lines.append(
+            f"     * {acc.account_identifier} ({acc.description}) -> Permitted: {len(acc.permitted_commands)} commands"
+        )
+    return "\n".join(lines)
 
 
 def main():
@@ -60,6 +123,8 @@ def main():
     parser.add_argument("--tls", dest="use_tls", action="store_true", default=True, help="Enable TLS 1.2+ encryption on listener (default: enabled)")
     parser.add_argument("--no-tls", dest="use_tls", action="store_false", help="Disable TLS on listener (development only)")
     parser.add_argument("--check-config", action="store_true", help="Validate YAML schema and secret settings")
+    parser.add_argument("--dump-config-json", action="store_true", help="Output parsed configuration and validation summary as JSON")
+    parser.add_argument("--execute-json", help="Execute a base64-encoded JSON ProxyRequest and output JSON result")
     parser.add_argument("--test-dc", action="store_true", help="Test LDAPS connectivity to Domain Controllers")
     parser.add_argument("--list-commands", action="store_true", help="List all permissible Active Directory commands")
     parser.add_argument("--run-tests", action="store_true", help="Execute built-in unit & security test suite")
@@ -95,7 +160,6 @@ def main():
     # Load configuration
     config_path = args.config
     if not os.path.exists(config_path):
-        # Check relative fallback
         fallback = os.path.join(os.path.dirname(__file__), "config.yaml")
         if os.path.exists(fallback):
             config_path = fallback
@@ -107,19 +171,43 @@ def main():
     config = build_proxy_config(raw_dict)
     engine = AdProxyEngine(config)
 
-    # Check config
+    # Check config (human-readable)
     if args.check_config:
-        print(f"[OK] Configuration successfully parsed from: {config_path}")
-        print(f"  - Active Directory Domain:   {config.active_directory.domain_name}")
-        print(f"  - Base DN:                   {config.active_directory.base_dn}")
-        print(f"  - Domain Controllers:        {', '.join(config.active_directory.domain_controllers)}")
-        print(f"  - Upstream Auth Mode:        {config.upstream_auth.mode.value}")
-        print(f"  - Secret Provider:           {config.upstream_auth.secret_provider.value}")
-        print(f"  - SIEM Format:               {config.siem.format.value}")
-        print(f"  - SIEM Destinations:         {', '.join(config.siem.destinations)}")
-        print(f"  - Registered Service Accounts: {len(config.allowed_service_accounts)}")
-        for acc in config.allowed_service_accounts.values():
-            print(f"     * {acc.account_identifier} ({acc.description}) -> Permitted: {len(acc.permitted_commands)} commands")
+        print(format_check_output(config, config_path))
+        return
+
+    # Dump config (structured JSON for Web Console)
+    if args.dump_config_json:
+        output = {
+            "summary": serialize_config_summary(config, config_path),
+            "check_output": format_check_output(config, config_path),
+        }
+        print(json.dumps(output))
+        return
+
+    # Execute JSON payload (used by Web Console API)
+    if args.execute_json:
+        input_data = json.loads(base64.b64decode(args.execute_json).decode("utf-8"))
+        req = ProxyRequest(
+            caller_account=input_data["caller_account"],
+            caller_password=input_data["caller_password"],
+            command=input_data["command"],
+            parameters=input_data.get("parameters", {}),
+            client_ip=input_data.get("client_ip", "127.0.0.1"),
+            ticket_id=input_data.get("ticket_id"),
+        )
+        res = engine.process_request(req)
+        recent = engine.siem.get_recent_events(limit=1)
+        siem_event = recent[0] if recent else None
+        print(json.dumps({
+            "success": res.success,
+            "status_code": res.status_code,
+            "message": res.message,
+            "data": res.data,
+            "request_id": res.request_id,
+            "duration_ms": res.duration_ms,
+            "siem_event": siem_event,
+        }))
         return
 
     # Test DC connectivity
@@ -137,7 +225,7 @@ def main():
         cmd = args.command or "list_group_members"
         params = parse_cli_params(args.param) if args.param else {"group_name": "VPN-Users"}
 
-        print(f"\n--- Simulating AI Agent Query ---")
+        print("\n--- Simulating AI Agent Query ---")
         print(f"Caller Account: {agent}")
         print(f"Command:        {cmd}")
         print(f"Parameters:     {params}")
@@ -153,7 +241,7 @@ def main():
         )
         res = engine.process_request(req)
 
-        print(f"\nResult:")
+        print("\nResult:")
         print(f"Success:     {res.success}")
         print(f"Status Code: {res.status_code}")
         print(f"Message:     {res.message}")
@@ -161,7 +249,6 @@ def main():
         if res.data is not None:
             print(f"Data:\n{json.dumps(res.data, indent=2)}")
 
-        # Print SIEM event produced
         recent = engine.siem.get_recent_events(limit=1)
         if recent:
             print(f"\nGenerated SIEM Audit Event:\n{json.dumps(recent[0], indent=2)}")

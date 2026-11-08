@@ -60,6 +60,10 @@ class RbacEngine:
     def __init__(self, config: ProxyConfig):
         self.config = config
         self._accounts = config.allowed_service_accounts
+        self._indexed_accounts: Dict[str, AllowedServiceAccount] = {}
+        for key, acc in self._accounts.items():
+            self._indexed_accounts[self.normalize_account(key)] = acc
+            self._indexed_accounts[self.normalize_account(acc.account_identifier)] = acc
 
     def normalize_account(self, identifier: str) -> str:
         """Normalizes account identifier (case-insensitive, strips whitespace/domain prefixes)."""
@@ -77,11 +81,7 @@ class RbacEngine:
 
     def get_service_account(self, caller: str) -> Optional[AllowedServiceAccount]:
         """Looks up service account policy matching sAMAccountName, UPN, or exact DN."""
-        normalized = self.normalize_account(caller)
-        for key, acc in self._accounts.items():
-            if self.normalize_account(key) == normalized or self.normalize_account(acc.account_identifier) == normalized:
-                return acc
-        return None
+        return self._indexed_accounts.get(self.normalize_account(caller))
 
     def evaluate_permission(
         self,

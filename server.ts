@@ -1,8 +1,16 @@
+/**
+ * Active Directory Secure LDAPS Proxy — Management Console Backend Server
+ *
+ * Bridges the React Web Management Console with the Python 3 Zero-Trust AD-Proxy Engine.
+ * All child process calls use `execFile` with explicit argument arrays (no shell interpolation)
+ * to prevent command injection and simplify process orchestration.
+ */
+
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
-import { exec, spawn } from 'child_process';
+import { execFile } from 'child_process';
 import os from 'os';
 import dotenv from 'dotenv';
 
@@ -14,108 +22,164 @@ const ROOT_DIR = process.cwd();
 const CONFIG_PATH = path.join(ROOT_DIR, 'ad_proxy', 'config.yaml');
 const AUDIT_LOG_PATH = path.join(ROOT_DIR, 'logs', 'audit.log');
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
+
+// Helper to extract the final JSON object from Python CLI stdout
+function parseLastJsonLine(stdout: string): any {
+  const lines = stdout.trim().split('\n').reverse();
+  const jsonLine = lines.find((l) => l.trim().startsWith('{') && l.trim().endsWith('}'));
+  return jsonLine ? JSON.parse(jsonLine) : {};
+}
 
 // -----------------------------------------------------------------------------
-// REST API FOR THE ACTIVE DIRECTORY LDAPS PROXY MANAGEMENT CONSOLE
+// 1. Health & Runtime Status
 // -----------------------------------------------------------------------------
-
-// 1. Health & Status
-app.get('/api/proxy/health', (req, res) => {
-  const configExists = fs.existsSync(CONFIG_PATH);
+app.get('/api/proxy/health', (_req, res) => {
   res.json({
     status: 'ONLINE',
-    proxy_engine: 'Python 3.10 / ActiveDirectoryLdapClient',
+    proxy_engine: 'Python 3.10+ / ActiveDirectoryLdapClient',
     tls_enforced: true,
     protocol: 'LDAPS (TLS 1.2+)',
     config_file: CONFIG_PATH,
-    config_loaded: configExists,
+    config_loaded: fs.existsSync(CONFIG_PATH),
     timestamp: new Date().toISOString(),
   });
 });
 
-// 2. Read Configuration
-app.get('/api/proxy/config', (req, res) => {
-  try {
-    if (!fs.existsSync(CONFIG_PATH)) {
-      return res.status(404).json({ error: 'Config file not found' });
-    }
-    const yamlContent = fs.readFileSync(CONFIG_PATH, 'utf-8');
-    
-    // Also run python CLI check-config to get structured summary
-    exec('python3 -m ad_proxy.cli --check-config', { cwd: ROOT_DIR }, (err, stdout, stderr) => {
-      res.json({
-        raw_yaml: yamlContent,
-        check_output: stdout || stderr,
-        is_valid: !err,
-      });
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+// -----------------------------------------------------------------------------
+// 2. Read & Parse Active Configuration (Raw YAML + Structured JSON Summary)
+// -----------------------------------------------------------------------------
+app.get('/api/proxy/config', (_req, res) => {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    return res.status(404).json({ error: 'Config file not found' });
   }
+  const yamlContent = fs.readFileSync(CONFIG_PATH, 'utf-8');
+
+  execFile(
+    'python3',
+    ['-m', 'ad_proxy.cli', '--config', CONFIG_PATH, '--dump-config-json'],
+    { cwd: ROOT_DIR },
+    (err, stdout, stderr) => {
+      if (err) {
+        return res.json({
+          raw_yaml: yamlContent,
+          check_output: stderr || stdout || err.message,
+          parsed_config: null,
+          is_valid: false,
+        });
+      }
+      try {
+        const parsed = parseLastJsonLine(stdout);
+        res.json({
+          raw_yaml: yamlContent,
+          check_output: parsed.check_output || stdout,
+          parsed_config: parsed.summary || null,
+          is_valid: true,
+        });
+      } catch {
+        res.json({
+          raw_yaml: yamlContent,
+          check_output: stdout || stderr,
+          parsed_config: null,
+          is_valid: true,
+        });
+      }
+    }
+  );
 });
 
-// 3. Save Configuration
+// -----------------------------------------------------------------------------
+// 3. Validate & Save Configuration
+// -----------------------------------------------------------------------------
 app.post('/api/proxy/config', (req, res) => {
-  try {
-    const { yaml_content } = req.body;
-    if (!yaml_content) {
-      return res.status(400).json({ error: 'No YAML content provided' });
-    }
-    
-    // Test validity before overwriting by writing to temporary file
-    const tempPath = path.join(ROOT_DIR, 'ad_proxy', 'config.tmp.yaml');
-    fs.writeFileSync(tempPath, yaml_content, 'utf-8');
+  const { yaml_content, validate_only } = req.body;
+  if (!yaml_content || typeof yaml_content !== 'string') {
+    return res.status(400).json({ error: 'No YAML content provided' });
+  }
 
-    exec(`python3 -m ad_proxy.cli --config ${tempPath} --check-config`, { cwd: ROOT_DIR }, (err, stdout, stderr) => {
+  const tempPath = path.join(ROOT_DIR, 'ad_proxy', 'config.tmp.yaml');
+  try {
+    fs.writeFileSync(tempPath, yaml_content, 'utf-8');
+  } catch (err: any) {
+    return res.status(500).json({ error: `Failed to write temporary config: ${err.message}` });
+  }
+
+  execFile(
+    'python3',
+    ['-m', 'ad_proxy.cli', '--config', tempPath, '--dump-config-json'],
+    { cwd: ROOT_DIR },
+    (err, stdout, stderr) => {
       if (err) {
-        fs.unlinkSync(tempPath);
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
         return res.status(400).json({
           error: 'YAML configuration validation failed',
-          details: stderr || stdout,
+          details: stderr || stdout || err.message,
         });
       }
 
-      // Valid: overwrite primary config
-      fs.writeFileSync(CONFIG_PATH, yaml_content, 'utf-8');
+      let parsed: any = {};
+      try {
+        parsed = parseLastJsonLine(stdout);
+      } catch {
+        // Fallback if stdout is plain text
+      }
+
+      if (!validate_only) {
+        fs.writeFileSync(CONFIG_PATH, yaml_content, 'utf-8');
+      }
       if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
 
       res.json({
         success: true,
-        message: 'Active Directory Proxy configuration updated and reloaded successfully.',
-        output: stdout,
+        message: validate_only
+          ? 'YAML syntax and schema validated cleanly (no changes written to disk).'
+          : 'Active Directory Proxy configuration validated and applied.',
+        output: parsed.check_output || stdout,
+        parsed_config: parsed.summary || null,
       });
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
+    }
+  );
 });
 
-// 4. Command Catalog
-app.get('/api/proxy/commands', (req, res) => {
-  exec('python3 -c "from ad_proxy.commands import registry; import json; print(json.dumps(registry.list_commands()))"', { cwd: ROOT_DIR }, (err, stdout, stderr) => {
-    if (err) {
-      return res.status(500).json({ error: stderr || err.message });
+// -----------------------------------------------------------------------------
+// 4. Command Catalog Metadata
+// -----------------------------------------------------------------------------
+app.get('/api/proxy/commands', (_req, res) => {
+  execFile(
+    'python3',
+    ['-c', 'from ad_proxy.commands import registry; import json; print(json.dumps(registry.list_commands()))'],
+    { cwd: ROOT_DIR },
+    (err, stdout, stderr) => {
+      if (err) {
+        return res.status(500).json({ error: stderr || err.message });
+      }
+      try {
+        const commands = JSON.parse(stdout.trim());
+        res.json({ commands, count: commands.length });
+      } catch {
+        res.status(500).json({ error: 'Failed to parse command catalog output' });
+      }
     }
-    try {
-      const commands = JSON.parse(stdout.trim());
-      res.json({ commands, count: commands.length });
-    } catch (e: any) {
-      res.status(500).json({ error: 'Failed to parse command catalog output' });
-    }
-  });
+  );
 });
 
-// 4b. Host & Docker Deployment Status
-app.get('/api/proxy/host-info', (req, res) => {
-  exec('python3 --version', { cwd: ROOT_DIR }, (err, stdout, stderr) => {
+// -----------------------------------------------------------------------------
+// 5. Host & Docker Deployment Readiness
+// -----------------------------------------------------------------------------
+app.get('/api/proxy/host-info', (_req, res) => {
+  execFile('python3', ['--version'], { cwd: ROOT_DIR }, (_err, stdout, stderr) => {
     const pyVersion = (stdout || stderr || 'Python 3.10+').trim();
-    const hasDockerfiles = fs.existsSync(path.join(ROOT_DIR, 'Dockerfile')) && fs.existsSync(path.join(ROOT_DIR, 'docker-compose.yml'));
-    const hasFullstackDocker = fs.existsSync(path.join(ROOT_DIR, 'Dockerfile.fullstack')) && fs.existsSync(path.join(ROOT_DIR, 'docker-compose.fullstack.yml'));
+    const hasDockerfiles =
+      fs.existsSync(path.join(ROOT_DIR, 'Dockerfile')) &&
+      fs.existsSync(path.join(ROOT_DIR, 'docker-compose.yml'));
+    const hasFullstackDocker =
+      fs.existsSync(path.join(ROOT_DIR, 'Dockerfile.fullstack')) &&
+      fs.existsSync(path.join(ROOT_DIR, 'docker-compose.fullstack.yml'));
     const hasDockerInstaller = fs.existsSync(path.join(ROOT_DIR, 'docker-install.sh'));
     const hasInstaller = fs.existsSync(path.join(ROOT_DIR, 'install.sh'));
     const hasSystemd = fs.existsSync(path.join(ROOT_DIR, 'ad-proxy.service'));
     const hasCerts = fs.existsSync(path.join(ROOT_DIR, 'certs', 'ad_proxy_server.crt'));
+
     res.json({
       platform: 'Linux',
       os_type: os.type(),
@@ -137,7 +201,9 @@ app.get('/api/proxy/host-info', (req, res) => {
   });
 });
 
-// 5. Execute / Simulate AI Agent LDAPS Request through Python Engine
+// -----------------------------------------------------------------------------
+// 6. Execute / Simulate AI Agent LDAPS Request via Python Engine
+// -----------------------------------------------------------------------------
 app.post('/api/proxy/execute', (req, res) => {
   const { caller_account, caller_password, command, parameters, ticket_id } = req.body;
 
@@ -149,80 +215,45 @@ app.post('/api/proxy/execute', (req, res) => {
     });
   }
 
-  const inputPayload = JSON.stringify({
-    caller_account,
-    caller_password,
-    command,
-    parameters: parameters || {},
-    ticket_id: ticket_id || null,
-  });
-  const b64Payload = Buffer.from(inputPayload).toString('base64');
+  const b64Payload = Buffer.from(
+    JSON.stringify({
+      caller_account,
+      caller_password,
+      command,
+      parameters: parameters || {},
+      ticket_id: ticket_id || null,
+    })
+  ).toString('base64');
 
-  // Build python script invocation for accurate execution
-  const pyCode = `
-import base64, json, sys
-from ad_proxy.yaml_loader import load_yaml_raw, build_proxy_config
-from ad_proxy.proxy_engine import AdProxyEngine
-from ad_proxy.models import ProxyRequest
-
-input_data = json.loads(base64.b64decode("${b64Payload}").decode("utf-8"))
-
-cfg_dict = load_yaml_raw("${CONFIG_PATH}")
-config = build_proxy_config(cfg_dict)
-engine = AdProxyEngine(config)
-
-req = ProxyRequest(
-    caller_account=input_data["caller_account"],
-    caller_password=input_data["caller_password"],
-    command=input_data["command"],
-    parameters=input_data.get("parameters", {}),
-    client_ip="127.0.0.1",
-    ticket_id=input_data.get("ticket_id")
-)
-
-res = engine.process_request(req)
-recent = engine.siem.get_recent_events(limit=1)
-siem_event = recent[0] if recent else None
-
-output = {
-    "success": res.success,
-    "status_code": res.status_code,
-    "message": res.message,
-    "data": res.data,
-    "request_id": res.request_id,
-    "duration_ms": res.duration_ms,
-    "siem_event": siem_event
-}
-print(json.dumps(output))
-`;
-
-  exec(`python3 -c '${pyCode.replace(/'/g, "'\\''")}'`, { cwd: ROOT_DIR }, (err, stdout, stderr) => {
-    if (err && !stdout) {
-      return res.status(500).json({
-        success: false,
-        status_code: 'PYTHON_ERROR',
-        message: stderr || err.message,
-      });
+  execFile(
+    'python3',
+    ['-m', 'ad_proxy.cli', '--config', CONFIG_PATH, '--execute-json', b64Payload],
+    { cwd: ROOT_DIR },
+    (err, stdout, stderr) => {
+      if (err && !stdout) {
+        return res.status(500).json({
+          success: false,
+          status_code: 'PYTHON_ERROR',
+          message: stderr || err.message,
+        });
+      }
+      try {
+        res.json(parseLastJsonLine(stdout));
+      } catch {
+        res.status(500).json({
+          success: false,
+          status_code: 'PARSE_ERROR',
+          message: `Failed to parse Python engine output: ${stdout}`,
+        });
+      }
     }
-
-    try {
-      // Find JSON line in stdout (in case stdout contains logging)
-      const lines = stdout.trim().split('\n');
-      const jsonLine = lines.reverse().find(l => l.startsWith('{') && l.endsWith('}')) || '{}';
-      const parsed = JSON.parse(jsonLine);
-      res.json(parsed);
-    } catch (e: any) {
-      res.status(500).json({
-        success: false,
-        status_code: 'PARSE_ERROR',
-        message: `Failed to parse Python engine output: ${stdout}`,
-      });
-    }
-  });
+  );
 });
 
-// 6. SIEM Audit Events Stream
-app.get('/api/proxy/siem-logs', (req, res) => {
+// -----------------------------------------------------------------------------
+// 7. SIEM Audit Events Stream
+// -----------------------------------------------------------------------------
+app.get('/api/proxy/siem-logs', (_req, res) => {
   try {
     const events: any[] = [];
     if (fs.existsSync(AUDIT_LOG_PATH)) {
@@ -231,43 +262,79 @@ app.get('/api/proxy/siem-logs', (req, res) => {
       for (const line of lines) {
         try {
           if (line.startsWith('{')) {
-            events.push(JSON.parse(line));
+            const rawObj = JSON.parse(line);
+            // Normalize ECS JSON records into flat SiemEvent shape if needed
+            if (rawObj['@timestamp'] && rawObj.event) {
+              events.push({
+                event_id: rawObj.event.id,
+                timestamp: rawObj['@timestamp'],
+                caller_account: rawObj.user?.name || 'unknown',
+                client_ip: rawObj.source?.ip || '127.0.0.1',
+                command: rawObj.active_directory?.command || rawObj.event.action,
+                target_dn: rawObj.active_directory?.target_dn || null,
+                filter_string: rawObj.active_directory?.filter || null,
+                outcome:
+                  rawObj.threat?.indicator === 'ROGUE_OR_HALLUCINATING_AGENT_DETECTED'
+                    ? 'SECURITY_ALERT_ROGUE_AGENT'
+                    : rawObj.active_directory?.status_code || rawObj.event.outcome?.toUpperCase(),
+                status_code: rawObj.active_directory?.status_code || 'UNKNOWN',
+                message: rawObj.event.reason || '',
+                duration_ms: rawObj.event.duration ? rawObj.event.duration / 1_000_000 : 0.4,
+                parameters: rawObj.active_directory?.parameters || {},
+                domain: rawObj.user?.domain || 'corp.acme.internal',
+                severity: rawObj.event.severity ?? 3,
+                is_high_severity_alert:
+                  rawObj.event.severity === 10 || Boolean(rawObj.threat),
+                alert_rule: rawObj.threat?.rule || null,
+                threat: rawObj.threat || undefined,
+              });
+            } else {
+              events.push(rawObj);
+            }
           } else {
             events.push({ raw: line, timestamp: new Date().toISOString() });
           }
-        } catch (e) {
+        } catch {
           events.push({ raw: line, timestamp: new Date().toISOString() });
         }
       }
     }
-
-    // If file has few items, also pull recent simulated items from Python engine
     res.json({ events, count: events.length, log_file: AUDIT_LOG_PATH });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 7. Run Python Test Suite (Unit, Security Audit, Rogue Agent Alerts & Docker/Linux Compliance)
-app.post('/api/proxy/run-tests', (req, res) => {
-  exec('python3 -m ad_proxy.cli --run-tests', { cwd: ROOT_DIR }, (err, stdout, stderr) => {
-    const rawOutput = (stderr || '') + '\n' + (stdout || '');
-    const isPassing = !err;
-    const ranMatches = [...rawOutput.matchAll(/Ran (\d+) tests/g)];
-    const passedCount = ranMatches.length > 0
-      ? ranMatches.reduce((acc, m) => acc + parseInt(m[1], 10), 0)
-      : (isPassing ? 37 : 0);
-    res.json({
-      success: isPassing,
-      output: rawOutput.trim(),
-      passed_count: passedCount,
-      total_count: 37,
-    });
-  });
+// -----------------------------------------------------------------------------
+// 8. Run Complete Python Verification Suite (37 Tests)
+// -----------------------------------------------------------------------------
+app.post('/api/proxy/run-tests', (_req, res) => {
+  execFile(
+    'python3',
+    ['-m', 'ad_proxy.cli', '--run-tests'],
+    { cwd: ROOT_DIR },
+    (err, stdout, stderr) => {
+      const rawOutput = `${stderr || ''}\n${stdout || ''}`.trim();
+      const isPassing = !err;
+      const ranMatches = [...rawOutput.matchAll(/Ran (\d+) tests/g)];
+      const passedCount =
+        ranMatches.length > 0
+          ? ranMatches.reduce((acc, m) => acc + parseInt(m[1], 10), 0)
+          : isPassing
+          ? 37
+          : 0;
+      res.json({
+        success: isPassing,
+        output: rawOutput,
+        passed_count: passedCount,
+        total_count: 37,
+      });
+    }
+  );
 });
 
 // -----------------------------------------------------------------------------
-// VITE CLIENT MOUNTING
+// Vite Dev Middleware / Static Bundle Serving
 // -----------------------------------------------------------------------------
 async function startServer() {
   const isDev = process.env.NODE_ENV !== 'production';
@@ -282,14 +349,14 @@ async function startServer() {
     const distPath = path.join(ROOT_DIR, 'dist');
     if (fs.existsSync(distPath)) {
       app.use(express.static(distPath));
-      app.get('*', (req, res) => {
+      app.get('*', (_req, res) => {
         res.sendFile(path.join(distPath, 'index.html'));
       });
     }
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[AD-Proxy Web Console] Running on http://0.0.0.0:${PORT}`);
+    console.log(`[AD-Proxy Web Console] Listening on http://0.0.0.0:${PORT}`);
   });
 }
 

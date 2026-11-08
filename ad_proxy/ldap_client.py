@@ -158,24 +158,18 @@ class ActiveDirectoryLdapClient:
 
         # Groups matching
         elif "group" in lowered_filter:
-            for gname, gdata in self._mock_directory.get("groups", {}).items():
-                if len(results) >= size_limit:
-                    break
-                results.append(self._filter_attributes(gdata, attributes))
+            group_items = list(self._mock_directory.get("groups", {}).values())[:size_limit]
+            return [self._filter_attributes(g, attributes) for g in group_items]
 
         # Computers matching
         elif "computer" in lowered_filter:
-            for cname, cdata in self._mock_directory.get("computers", {}).items():
-                if len(results) >= size_limit:
-                    break
-                results.append(self._filter_attributes(cdata, attributes))
+            comp_items = list(self._mock_directory.get("computers", {}).values())[:size_limit]
+            return [self._filter_attributes(c, attributes) for c in comp_items]
 
         # OUs matching
         elif "organizationalunit" in lowered_filter:
-            for ou_data in self._mock_directory.get("ous", []):
-                if len(results) >= size_limit:
-                    break
-                results.append(self._filter_attributes(ou_data, attributes))
+            ou_items = self._mock_directory.get("ous", [])[:size_limit]
+            return [self._filter_attributes(ou, attributes) for ou in ou_items]
 
         return results
 

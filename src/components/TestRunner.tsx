@@ -3,19 +3,17 @@ import {
   Play,
   CheckCircle2,
   XCircle,
-  Terminal,
   ShieldCheck,
-  RefreshCw,
-  AlertTriangle,
-  Lock,
-  Box,
-  FileCheck
+  RefreshCw
 } from 'lucide-react';
 
 interface TestRunnerProps {
   onRunFinished?: () => void;
 }
 
+/**
+ * Automated Security, Unit, Rogue Agent, and Docker/Linux Compliance Test Runner.
+ */
 export const TestRunner: React.FC<TestRunnerProps> = ({ onRunFinished }) => {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<{
@@ -75,9 +73,10 @@ export const TestRunner: React.FC<TestRunnerProps> = ({ onRunFinished }) => {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
-              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              <span className="text-[11px] font-mono font-bold uppercase text-emerald-400">
                 Automated QA
               </span>
+              <span className="text-slate-600">·</span>
               <h2 className="text-base font-semibold text-white">Security & Functional Verification Suite</h2>
             </div>
             <p className="text-xs text-slate-400 mt-1">
@@ -88,7 +87,7 @@ export const TestRunner: React.FC<TestRunnerProps> = ({ onRunFinished }) => {
           <button
             onClick={runTests}
             disabled={running}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-bold rounded-md transition-colors disabled:opacity-50 text-xs whitespace-nowrap shrink-0 shadow-lg shadow-emerald-500/10 cursor-pointer"
+            className="flex items-center gap-2 px-4 py-2 bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-bold rounded-md transition-colors disabled:opacity-50 text-xs whitespace-nowrap shrink-0 cursor-pointer"
           >
             {running ? (
               <>
@@ -125,11 +124,12 @@ export const TestRunner: React.FC<TestRunnerProps> = ({ onRunFinished }) => {
                 {result.success ? 'All Security Checks & Functional Tests Passed' : 'Test Suite Failed'}
               </div>
               <div className="text-slate-400 text-[11px] mt-0.5">
-                Passed: <span className="font-mono font-bold text-white tabular-nums">{result.passed_count}</span> / <span className="font-mono tabular-nums">{result.total_count}</span> test assertions (Zero Regressions)
+                Passed: <span className="font-mono font-bold text-white tabular-nums">{result.passed_count}</span> /{' '}
+                <span className="font-mono tabular-nums">{result.total_count}</span> test assertions (Zero Regressions)
               </div>
             </div>
           </div>
-          <span className="font-mono font-bold px-2.5 py-1 rounded bg-slate-950 border border-slate-800 text-emerald-400">
+          <span className="font-mono font-bold text-emerald-400 tabular-nums">
             100% PASSING
           </span>
         </div>
@@ -153,10 +153,10 @@ export const TestRunner: React.FC<TestRunnerProps> = ({ onRunFinished }) => {
 
       {/* Terminal Output */}
       {result && (
-        <div className="rounded-lg border border-slate-800 bg-slate-950 overflow-hidden shadow-2xl">
+        <div className="rounded-lg border border-slate-800 bg-slate-950 overflow-hidden">
           <div className="px-4 py-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400 font-mono">
             <span>Terminal: python3 -m ad_proxy.cli --run-tests (37 security, unit & Docker compliance checks)</span>
-            <span className="text-emerald-400">Exit Code: 0</span>
+            <span className="text-emerald-400 tabular-nums">Exit Code: 0</span>
           </div>
           <pre className="p-4 text-[11px] font-mono text-emerald-400 overflow-x-auto whitespace-pre-wrap max-h-96 leading-relaxed">
             {result.output}

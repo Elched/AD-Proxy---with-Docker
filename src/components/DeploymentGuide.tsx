@@ -1,20 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Server,
-  Layers,
   ShieldCheck,
-  Terminal,
   Check,
   Copy,
   Cpu,
   Lock,
-  FileCode2,
-  Box,
-  RefreshCw,
-  ExternalLink,
-  CheckCircle2,
-  AlertTriangle,
-  Play
+  Box
 } from 'lucide-react';
 
 interface HostInfo {
@@ -36,9 +27,14 @@ interface HostInfo {
   security_baseline: string;
 }
 
+/**
+ * Step-by-step Docker & Linux Host Installation Guide and Supply-Chain Audit.
+ */
 export const DeploymentGuide: React.FC = () => {
   const [activeSection, setActiveSection] = useState<'docker' | 'linux' | 'systemd' | 'audit'>('docker');
-  const [dockerSubSection, setDockerSubSection] = useState<'compose-headless' | 'compose-fullstack' | 'script' | 'cli' | 'cis'>('compose-headless');
+  const [dockerSubSection, setDockerSubSection] = useState<
+    'script' | 'compose-headless' | 'compose-fullstack' | 'cli' | 'cis'
+  >('script');
   const [hostInfo, setHostInfo] = useState<HostInfo | null>(null);
   const [copiedSnippet, setCopiedSnippet] = useState<string | null>(null);
 
@@ -55,6 +51,21 @@ export const DeploymentGuide: React.FC = () => {
     setTimeout(() => setCopiedSnippet(null), 2000);
   };
 
+  const dockerScriptSnippet = `# 1. Make the turnkey Docker installer executable
+chmod +x docker-install.sh
+
+# 2. Option A: Deploy headless LDAPS Proxy Engine (Port 10636)
+./docker-install.sh --headless
+
+# 3. Option B: Deploy Full-Stack Web Console + Engine (Ports 3000 + 10636)
+./docker-install.sh --fullstack
+
+# 4. Inspect running container health & TLS status
+./docker-install.sh --status
+
+# 5. Stop and remove containers when finished
+./docker-install.sh --down`;
+
   const dockerComposeHeadlessSnippet = `# Modern Compose v2 Specification (docker-compose.yml)
 name: ad-ldaps-proxy
 
@@ -67,68 +78,20 @@ services:
     container_name: ad-proxy-engine
     hostname: ad-proxy.corp.acme.internal
     restart: unless-stopped
-
-    # Ports: Expose Secure LDAPS REST Gateway
     ports:
       - "10636:10636"
-
-    # CIS Docker Benchmark Hardening
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     read_only: true
     user: "10001:10001"
-
-    # Ephemeral scratch memory space (tmpfs)
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
-
-    # Persistent Data & Configuration Mounts
     volumes:
       - ./ad_proxy/config.yaml:/app/ad_proxy/config.yaml:ro
       - ./certs:/app/certs:ro
-      - ./logs:/app/logs:rw
-
-    environment:
-      - PYTHONUNBUFFERED=1
-      - PYTHONDONTWRITEBYTECODE=1
-      - CONFIG_PATH=/app/ad_proxy/config.yaml
-      - AD_DOMAIN=\${AD_DOMAIN:-corp.acme.internal}
-      - AD_UPSTREAM_PASSWORD=\${AD_UPSTREAM_PASSWORD:-}
-      - VAULT_ADDR=\${VAULT_ADDR:-https://vault.corp.acme.internal:8200}
-      - VAULT_TOKEN=\${VAULT_TOKEN:-}
-      - SIEM_FORMAT=\${SIEM_FORMAT:-ecs_json}
-
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-        reservations:
-          cpus: '0.2'
-          memory: 128M
-
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c \\"import urllib.request, ssl; ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE; res = urllib.request.urlopen('https://127.0.0.1:10636/health', context=ctx, timeout=3); exit(0 if res.status == 200 else 1)\\""]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "20m"
-        max-file: "5"
-
-    networks:
-      - ad-proxy-network
-
-networks:
-  ad-proxy-network:
-    driver: bridge
-    name: ad-proxy-net`;
+      - ./logs:/app/logs:rw`;
 
   const dockerComposeFullstackSnippet = `# Full-Stack Compose v2 Specification (docker-compose.fullstack.yml)
 name: ad-proxy-fullstack
@@ -152,53 +115,7 @@ services:
     volumes:
       - ./ad_proxy/config.yaml:/app/ad_proxy/config.yaml:ro
       - ./certs:/app/certs:ro
-      - ./logs:/app/logs:rw
-    environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - PYTHONUNBUFFERED=1
-      - PYTHONDONTWRITEBYTECODE=1
-    deploy:
-      resources:
-        limits:
-          cpus: '1.5'
-          memory: 1G
-        reservations:
-          cpus: '0.2'
-          memory: 256M
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://127.0.0.1:3000/api/proxy/health || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "20m"
-        max-file: "5"
-    networks:
-      - ad-fullstack-net
-
-networks:
-  ad-fullstack-net:
-    driver: bridge
-    name: ad-fullstack-network`;
-
-  const dockerScriptSnippet = `# Execute turnkey automated Docker installation wizard
-chmod +x docker-install.sh
-
-# Option 1: Deploy headless LDAPS proxy container (Port 10636)
-./docker-install.sh --headless
-
-# Option 2: Deploy full-stack Web Console + Engine (Ports 3000 + 10636)
-./docker-install.sh --fullstack
-
-# Option 3: Inspect running container health status
-./docker-install.sh --status
-
-# Option 4: Stop and tear down containers
-./docker-install.sh --down`;
+      - ./logs:/app/logs:rw`;
 
   const dockerCliSnippet = `# 1. Build hardened production container image
 docker build -t ad-ldaps-proxy:1.0.0 .
@@ -218,22 +135,22 @@ docker run -d \\
   -v $(pwd)/logs:/app/logs:rw \\
   ad-ldaps-proxy:1.0.0
 
-# 3. Test TLS healthcheck endpoint
+# 3. Verify TLS healthcheck endpoint
 curl -k https://127.0.0.1:10636/health`;
 
-  const linuxInstallSnippet = `# 1. Clone repository to /opt/ad-proxy
+  const linuxInstallSnippet = `# Step 1: Prepare installation directory on your Linux host
 sudo mkdir -p /opt/ad-proxy
 sudo chown $(whoami):$(whoami) /opt/ad-proxy
 cd /opt/ad-proxy
 
-# 2. Execute automated Linux host installer
+# Step 2: Run the automated Linux installer (verifies Python 3.10+, venv, certs & 37 tests)
 chmod +x install.sh
 ./install.sh
 
-# 3. Start daemon manually (with TLS 1.2+ encryption)
+# Step 3: Start the LDAPS Proxy daemon manually (TLS 1.2+ enforced on Port 10636)
 ./venv/bin/python3 -m ad_proxy.cli --run --tls
 
-# 4. Optional: Run in background or test AI agent query
+# Step 4: Verify with a simulated AI agent query
 ./venv/bin/python3 -m ad_proxy.cli --simulate-agent \\
   --agent ai-triage-agent \\
   --command list_group_members \\
@@ -283,13 +200,14 @@ WantedBy=multi-user.target`;
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
-              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              <span className="text-[11px] font-mono font-bold uppercase text-emerald-400">
                 Production Ready
               </span>
-              <h2 className="text-base font-semibold text-white">Docker & Linux Host Installation Architecture</h2>
+              <span className="text-slate-600">·</span>
+              <h2 className="text-base font-semibold text-white">Docker & Linux Host Installation Guide</h2>
             </div>
             <p className="text-xs text-slate-400 mt-1">
-              Compliant with official Docker Compose Specification (v2+), CIS Docker Benchmark v1.6.0, and Linux host systemd standards.
+              Turnkey installation via Docker Compose v2 (<code className="text-slate-300">docker-install.sh</code>) or bare-metal Linux host (<code className="text-slate-300">install.sh</code>).
             </p>
           </div>
 
@@ -303,8 +221,8 @@ WantedBy=multi-user.target`;
                 <span className="text-slate-300 font-mono">{hostInfo.os_type} {hostInfo.arch}</span>
               </div>
               <span className="text-slate-700">|</span>
-              <span className="text-emerald-400 font-mono text-[11px] font-semibold">
-                ✓ {hostInfo.total_tests} Verified Security Tests
+              <span className="text-emerald-400 font-mono text-[11px] font-semibold tabular-nums">
+                {hostInfo.total_tests} Security Tests Verified
               </span>
             </div>
           )}
@@ -313,17 +231,17 @@ WantedBy=multi-user.target`;
         {/* Tab Controls */}
         <div className="flex items-center gap-1 mt-5 pt-3 border-t border-slate-800 text-xs overflow-x-auto">
           {[
-            { id: 'docker', label: '🐳 Docker Installation Option' },
-            { id: 'linux', label: '🐧 Linux Host Installation' },
-            { id: 'systemd', label: '⚙️ Systemd Service Daemon' },
-            { id: 'audit', label: '🛡️ Component Provenance & Security Audit' },
+            { id: 'docker', label: 'Docker Installation' },
+            { id: 'linux', label: 'Linux Host Installation' },
+            { id: 'systemd', label: 'Systemd Service Daemon' },
+            { id: 'audit', label: 'Supply-Chain & Component Audit' },
           ].map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveSection(tab.id as any)}
-              className={`px-3 py-1.5 rounded font-medium transition-colors whitespace-nowrap shrink-0 ${
+              className={`px-3 py-1.5 rounded font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                 activeSection === tab.id
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-semibold'
+                  ? 'bg-slate-800 text-white font-semibold'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
               }`}
             >
@@ -339,16 +257,16 @@ WantedBy=multi-user.target`;
           {/* Sub-navigation for Docker Options */}
           <div className="flex items-center gap-2 p-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs overflow-x-auto">
             {[
-              { id: 'compose-headless', label: 'Headless Engine (Compose v2)' },
-              { id: 'compose-fullstack', label: 'Full-Stack Console (Compose v2)' },
-              { id: 'script', label: 'Automated Script (docker-install.sh)' },
-              { id: 'cli', label: 'Direct Docker CLI' },
-              { id: 'cis', label: 'CIS Benchmark Controls' },
+              { id: 'script', label: '1. Quick Installer (docker-install.sh)' },
+              { id: 'compose-headless', label: '2. Headless Engine (Compose v2)' },
+              { id: 'compose-fullstack', label: '3. Full-Stack Console (Compose v2)' },
+              { id: 'cli', label: '4. Direct Docker CLI' },
+              { id: 'cis', label: '5. CIS Benchmark Audit' },
             ].map((sub) => (
               <button
                 key={sub.id}
                 onClick={() => setDockerSubSection(sub.id as any)}
-                className={`px-3 py-1.5 rounded font-medium transition-colors whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded font-medium transition-colors whitespace-nowrap cursor-pointer ${
                   dockerSubSection === sub.id
                     ? 'bg-slate-800 text-white font-semibold'
                     : 'text-slate-400 hover:text-slate-200'
@@ -367,7 +285,8 @@ WantedBy=multi-user.target`;
                 <span>Non-Root User (UID 10001)</span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Executes exclusively as unprivileged user <code className="text-slate-300">adproxy</code> with <code className="text-slate-300">/sbin/nologin</code>. Never runs as root.
+                Executes exclusively as unprivileged user <code className="text-slate-300">adproxy</code> with{' '}
+                <code className="text-slate-300">/sbin/nologin</code>. Never runs as root.
               </p>
             </div>
 
@@ -377,7 +296,8 @@ WantedBy=multi-user.target`;
                 <span>Immutable Read-Only Rootfs</span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Container root filesystem is mounted read-only. Ephemeral scratch space uses memory-backed <code className="text-slate-300">tmpfs</code> (/tmp).
+                Container root filesystem is mounted read-only. Ephemeral scratch space uses memory-backed{' '}
+                <code className="text-slate-300">tmpfs</code> (/tmp).
               </p>
             </div>
 
@@ -387,10 +307,35 @@ WantedBy=multi-user.target`;
                 <span>Dropped Capabilities (ALL)</span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Enforces <code className="text-slate-300">cap_drop: ALL</code> and <code className="text-slate-300">no-new-privileges:true</code> to prevent escalation.
+                Enforces <code className="text-slate-300">cap_drop: ALL</code> and{' '}
+                <code className="text-slate-300">no-new-privileges:true</code> to prevent privilege escalation.
               </p>
             </div>
           </div>
+
+          {/* Sub-view: Automated Script */}
+          {dockerSubSection === 'script' && (
+            <div className="rounded-lg border border-slate-800 bg-slate-900/90 p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold text-white">Turnkey Docker Installation Wizard (`docker-install.sh`)</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Recommended fastest setup: verifies Docker & Compose v2, initializes certificates and log directories, and launches containers.
+                  </p>
+                </div>
+                <button
+                  onClick={() => copyCode('script-cmd', './docker-install.sh --headless')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700 font-mono cursor-pointer"
+                >
+                  {copiedSnippet === 'script-cmd' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>./docker-install.sh --headless</span>
+                </button>
+              </div>
+              <pre className="p-4 bg-slate-950 border border-slate-800 rounded text-[11px] font-mono text-emerald-300 overflow-x-auto whitespace-pre">
+                {dockerScriptSnippet}
+              </pre>
+            </div>
+          )}
 
           {/* Sub-view: Headless Compose v2 */}
           {dockerSubSection === 'compose-headless' && (
@@ -399,12 +344,12 @@ WantedBy=multi-user.target`;
                 <div>
                   <h3 className="text-sm font-semibold text-white">Docker Compose v2 Deployment (Headless Engine)</h3>
                   <p className="text-xs text-slate-400 mt-0.5">
-                    Launch the minimal, hardened Zero-Trust LDAPS Proxy container exposing Port 10636 with TLS health check.
+                    Launch the minimal, hardened Zero-Trust LDAPS Proxy container exposing Port 10636 with TLS healthcheck.
                   </p>
                 </div>
                 <button
                   onClick={() => copyCode('compose-headless-cmd', 'docker compose up -d')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700 font-mono"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700 font-mono cursor-pointer"
                 >
                   {copiedSnippet === 'compose-headless-cmd' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>docker compose up -d</span>
@@ -416,7 +361,7 @@ WantedBy=multi-user.target`;
                   <span>docker-compose.yml</span>
                   <button
                     onClick={() => copyCode('compose-headless-yaml', dockerComposeHeadlessSnippet)}
-                    className="hover:text-white"
+                    className="hover:text-white cursor-pointer"
                   >
                     {copiedSnippet === 'compose-headless-yaml' ? 'Copied!' : 'Copy YAML'}
                   </button>
@@ -440,7 +385,7 @@ WantedBy=multi-user.target`;
                 </div>
                 <button
                   onClick={() => copyCode('compose-fullstack-cmd', 'docker compose -f docker-compose.fullstack.yml up -d')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700 font-mono"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700 font-mono cursor-pointer"
                 >
                   {copiedSnippet === 'compose-fullstack-cmd' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>docker compose -f docker-compose.fullstack.yml up -d</span>
@@ -452,7 +397,7 @@ WantedBy=multi-user.target`;
                   <span>docker-compose.fullstack.yml</span>
                   <button
                     onClick={() => copyCode('compose-fullstack-yaml', dockerComposeFullstackSnippet)}
-                    className="hover:text-white"
+                    className="hover:text-white cursor-pointer"
                   >
                     {copiedSnippet === 'compose-fullstack-yaml' ? 'Copied!' : 'Copy YAML'}
                   </button>
@@ -461,30 +406,6 @@ WantedBy=multi-user.target`;
                   {dockerComposeFullstackSnippet}
                 </pre>
               </div>
-            </div>
-          )}
-
-          {/* Sub-view: Automated Script */}
-          {dockerSubSection === 'script' && (
-            <div className="rounded-lg border border-slate-800 bg-slate-900/90 p-5 space-y-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold text-white">Turnkey Docker Installation Wizard (`docker-install.sh`)</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    Automated script that detects Docker & Compose v2, generates TLS certificates, creates volumes, and launches containers.
-                  </p>
-                </div>
-                <button
-                  onClick={() => copyCode('script-cmd', './docker-install.sh --headless')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700 font-mono"
-                >
-                  {copiedSnippet === 'script-cmd' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>./docker-install.sh --headless</span>
-                </button>
-              </div>
-              <pre className="p-4 bg-slate-950 border border-slate-800 rounded text-[11px] font-mono text-emerald-300 overflow-x-auto whitespace-pre">
-                {dockerScriptSnippet}
-              </pre>
             </div>
           )}
 
@@ -500,7 +421,7 @@ WantedBy=multi-user.target`;
                 </div>
                 <button
                   onClick={() => copyCode('cli-cmd', dockerCliSnippet)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700 font-mono"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700 font-mono cursor-pointer"
                 >
                   {copiedSnippet === 'cli-cmd' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>Copy Docker Command</span>
@@ -536,11 +457,7 @@ WantedBy=multi-user.target`;
                       <tr key={c.rule}>
                         <td className="px-3 py-2 text-emerald-400 font-bold">{c.rule}</td>
                         <td className="px-3 py-2 text-white font-sans">{c.control}</td>
-                        <td className="px-3 py-2">
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                            {c.status}
-                          </span>
-                        </td>
+                        <td className="px-3 py-2 text-emerald-400 font-bold">{c.status}</td>
                         <td className="px-3 py-2 text-slate-400 font-sans">{c.detail}</td>
                       </tr>
                     ))}
@@ -558,14 +475,14 @@ WantedBy=multi-user.target`;
           <div className="rounded-lg border border-slate-800 bg-slate-900/90 p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-semibold text-white">Automated Linux Installation Script (`install.sh`)</h3>
+                <h3 className="text-sm font-semibold text-white">Automated Linux Host Installer (`install.sh`)</h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Certified turnkey Linux installer tested on Ubuntu, Debian, RHEL, Rocky Linux, and Alpine.
+                  Certified turnkey Linux installer tested on Ubuntu, Debian, RHEL, Rocky Linux, and Alpine with Python 3.10+.
                 </p>
               </div>
               <button
                 onClick={() => copyCode('linux-cmd', linuxInstallSnippet)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700 font-mono"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700 font-mono cursor-pointer"
               >
                 {copiedSnippet === 'linux-cmd' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                 <span>Copy Instructions</span>
@@ -578,17 +495,24 @@ WantedBy=multi-user.target`;
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 text-xs">
               <div className="p-3 rounded bg-slate-950 border border-slate-800/80">
-                <span className="font-semibold text-slate-200 block mb-1">Debian / Ubuntu Package Setup:</span>
-                <code className="text-slate-400 font-mono text-[11px]">sudo apt update && sudo apt install -y python3 python3-pip python3-venv</code>
+                <span className="font-semibold text-slate-200 block mb-1">Debian / Ubuntu Prerequisites:</span>
+                <code className="text-slate-400 font-mono text-[11px]">
+                  sudo apt update && sudo apt install -y python3 python3-pip python3-venv
+                </code>
               </div>
               <div className="p-3 rounded bg-slate-950 border border-slate-800/80">
-                <span className="font-semibold text-slate-200 block mb-1">RHEL / Rocky / AlmaLinux Setup:</span>
-                <code className="text-slate-400 font-mono text-[11px]">sudo dnf install -y python3 python3-pip</code>
+                <span className="font-semibold text-slate-200 block mb-1">RHEL / Rocky / AlmaLinux Prerequisites:</span>
+                <code className="text-slate-400 font-mono text-[11px]">
+                  sudo dnf install -y python3 python3-pip
+                </code>
               </div>
             </div>
 
             <div className="p-3.5 rounded bg-blue-950/30 border border-blue-900/60 text-xs text-blue-200">
-              <strong className="text-white">Zero-Dependency Resilient Fallback:</strong> If operating in an air-gapped or minimal Linux server where pip or wheel compilation is restricted, the AD-Proxy utilizes a built-in standard library fallback engine (<code className="text-white font-mono">PurePythonYamlParser</code> & <code className="text-white font-mono">urllib.request</code>) requiring zero external pip dependencies.
+              <strong className="text-white">Zero-Dependency Resilient Fallback:</strong> If operating on an air-gapped
+              or minimal Linux server where pip is restricted, AD-Proxy automatically falls back to its built-in Python
+              standard library engine (<code className="text-white font-mono">PurePythonYamlParser</code> &{' '}
+              <code className="text-white font-mono">urllib.request</code>).
             </div>
           </div>
         </div>
@@ -602,12 +526,12 @@ WantedBy=multi-user.target`;
               <div>
                 <h3 className="text-sm font-semibold text-white">Production Systemd Service Unit (`ad-proxy.service`)</h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Sandboxed systemd unit with filesystem protection, private tmp, and auto-restart on failure.
+                  Sandboxed systemd unit with strict filesystem protection, private tmp, and automatic restart on failure.
                 </p>
               </div>
               <button
                 onClick={() => copyCode('systemd', systemdSnippet)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs rounded border border-slate-700 cursor-pointer"
               >
                 {copiedSnippet === 'systemd' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                 <span>Copy Service Unit</span>

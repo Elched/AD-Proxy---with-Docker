@@ -1,20 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import {
   ShieldAlert,
-  ShieldCheck,
   Search,
-  Filter,
   Download,
   RefreshCw,
-  Clock,
-  User,
-  Terminal,
-  ExternalLink,
-  ChevronRight,
-  Eye
+  Eye,
+  CheckCircle2,
+  XCircle
 } from 'lucide-react';
 import { SiemEvent } from '../types';
 
+/**
+ * Live SIEM Security Audit Stream Viewer.
+ * Displays normalized audit events in real time with filtering, search,
+ * and dual-format inspection (Elastic ECS JSON and ArcSight/Splunk CEF).
+ */
 export const SiemAuditStream: React.FC = () => {
   const [events, setEvents] = useState<SiemEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,22 +44,30 @@ export const SiemAuditStream: React.FC = () => {
 
   const filteredEvents = events.filter((e) => {
     if (outcomeFilter !== 'ALL') {
+      const isAlert =
+        e.is_high_severity_alert ||
+        e.severity === 10 ||
+        e.outcome === 'SECURITY_ALERT_ROGUE_AGENT' ||
+        e.status_code === 'CRITICAL_SECURITY_ALERT';
       if (outcomeFilter === 'SECURITY_ALERTS') {
-        if (!e.is_high_severity_alert && e.severity !== 10 && e.outcome !== 'SECURITY_ALERT_ROGUE_AGENT') return false;
+        if (!isAlert) return false;
       } else if (outcomeFilter === 'BLOCKED') {
         if (e.outcome === 'SUCCESS') return false;
+      } else if (outcomeFilter === 'FORBIDDEN') {
+        if (!e.outcome?.includes('FORBIDDEN') && e.status_code !== 'FORBIDDEN') return false;
       } else if (e.outcome !== outcomeFilter) {
         return false;
       }
     }
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      const matchCaller = e.caller_account?.toLowerCase().includes(q);
-      const matchCmd = e.command?.toLowerCase().includes(q);
-      const matchTarget = e.target_dn?.toLowerCase().includes(q);
-      const matchMsg = e.message?.toLowerCase().includes(q);
-      const matchRule = e.alert_rule?.toLowerCase().includes(q);
-      return matchCaller || matchCmd || matchTarget || matchMsg || matchRule;
+      return (
+        e.caller_account?.toLowerCase().includes(q) ||
+        e.command?.toLowerCase().includes(q) ||
+        e.target_dn?.toLowerCase().includes(q) ||
+        e.message?.toLowerCase().includes(q) ||
+        e.alert_rule?.toLowerCase().includes(q)
+      );
     }
     return true;
   });
@@ -76,10 +84,22 @@ export const SiemAuditStream: React.FC = () => {
   };
 
   const toCefFormat = (e: SiemEvent): string => {
-    const isAlert = e.is_high_severity_alert || e.severity === 10 || e.outcome === 'SECURITY_ALERT_ROGUE_AGENT';
-    const sev = isAlert ? 10 : (e.severity ?? (e.outcome === 'SUCCESS' ? 3 : e.outcome === 'AUTH_FAILED' ? 8 : 7));
-    const extra = isAlert ? ` cat=Threat/RogueAgent act=BLOCKED_CRITICAL_SECURITY_ALERT cs5Label=AlertRule cs5=${e.alert_rule || 'ROGUE_AGENT_GENERIC'}` : '';
-    return `CEF:0|EnterpriseSecurity|ActiveDirectoryProxy|1.0|${e.status_code || e.outcome}|${e.command}|${sev}|src=${e.client_ip || '127.0.0.1'} suser=${e.caller_account} cs1Label=Command cs1=${e.command} outcome=${e.outcome}${extra} msg=${(e.message || '').replace(/\|/g, '\\|')}`;
+    const isAlert =
+      e.is_high_severity_alert ||
+      e.severity === 10 ||
+      e.outcome === 'SECURITY_ALERT_ROGUE_AGENT' ||
+      e.status_code === 'CRITICAL_SECURITY_ALERT';
+    const sev = isAlert ? 10 : e.severity ?? (e.outcome === 'SUCCESS' ? 3 : e.outcome === 'AUTH_FAILED' ? 8 : 7);
+    const extra = isAlert
+      ? ` cat=Threat/RogueAgent act=BLOCKED_CRITICAL_SECURITY_ALERT cs5Label=AlertRule cs5=${
+          e.alert_rule || 'ROGUE_AGENT_GENERIC'
+        }`
+      : '';
+    return `CEF:0|EnterpriseSecurity|ActiveDirectoryProxy|1.0|${e.status_code || e.outcome}|${
+      e.command
+    }|${sev}|src=${e.client_ip || '127.0.0.1'} suser=${e.caller_account} cs1Label=Command cs1=${
+      e.command
+    } outcome=${e.outcome}${extra} msg=${(e.message || '').replace(/\|/g, '\\|')}`;
   };
 
   return (
@@ -90,21 +110,21 @@ export const SiemAuditStream: React.FC = () => {
           <div>
             <h2 className="text-base font-semibold text-white">SIEM Security Audit Stream</h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Live immutable audit trail of all Active Directory transactions, authentication attempts, and authorization decisions.
+              Immutable audit trail of all Active Directory transactions, authentication binds, and authorization decisions.
             </p>
           </div>
 
           <div className="flex items-center gap-2.5">
             <button
               onClick={exportLogs}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs border border-slate-700 transition-colors whitespace-nowrap shrink-0"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs border border-slate-700 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Download className="w-3.5 h-3.5" />
               <span>Export Audit Trail</span>
             </button>
             <button
               onClick={fetchLogs}
-              className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
+              className="p-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 cursor-pointer"
               title="Refresh log feed"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -115,10 +135,10 @@ export const SiemAuditStream: React.FC = () => {
         {/* Filter bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-3 border-t border-slate-800 text-xs">
           {/* Outcome Filter */}
-          <div className="flex items-center gap-1 p-1 bg-slate-950 rounded-md border border-slate-800">
+          <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-950 rounded-md border border-slate-800">
             {[
               { id: 'ALL', label: 'All Events' },
-              { id: 'SECURITY_ALERTS', label: '🚨 Critical Alerts (Sev 10)' },
+              { id: 'SECURITY_ALERTS', label: 'Critical Alerts (Sev 10)' },
               { id: 'SUCCESS', label: 'Success' },
               { id: 'BLOCKED', label: 'Blocked' },
               { id: 'AUTH_FAILED', label: 'Auth Failed' },
@@ -127,7 +147,7 @@ export const SiemAuditStream: React.FC = () => {
               <button
                 key={f.id}
                 onClick={() => setOutcomeFilter(f.id)}
-                className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                className={`px-2.5 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   outcomeFilter === f.id
                     ? f.id === 'SECURITY_ALERTS'
                       ? 'bg-rose-900 text-rose-100 font-bold'
@@ -165,7 +185,7 @@ export const SiemAuditStream: React.FC = () => {
                 <th className="px-4 py-3 font-semibold">Timestamp (UTC)</th>
                 <th className="px-4 py-3 font-semibold">Caller Service Account</th>
                 <th className="px-4 py-3 font-semibold">AD Command</th>
-                <th className="px-4 py-3 font-semibold">Target Object / DN</th>
+                <th className="px-4 py-3 font-semibold">Target Object / Rule</th>
                 <th className="px-4 py-3 font-semibold">Outcome & Severity</th>
                 <th className="px-4 py-3 font-semibold text-right">Duration</th>
                 <th className="px-4 py-3 text-right">Detail</th>
@@ -181,14 +201,16 @@ export const SiemAuditStream: React.FC = () => {
               ) : (
                 filteredEvents.map((evt, idx) => {
                   const isSuccess = evt.outcome === 'SUCCESS';
-                  const isRogueAlert = evt.is_high_severity_alert || evt.severity === 10 || evt.outcome === 'SECURITY_ALERT_ROGUE_AGENT';
+                  const isRogueAlert =
+                    evt.is_high_severity_alert ||
+                    evt.severity === 10 ||
+                    evt.outcome === 'SECURITY_ALERT_ROGUE_AGENT' ||
+                    evt.status_code === 'CRITICAL_SECURITY_ALERT';
                   return (
                     <tr
                       key={evt.event_id || idx}
                       className={`transition-colors cursor-pointer ${
-                        isRogueAlert
-                          ? 'bg-rose-950/25 hover:bg-rose-950/45 border-l-4 border-l-rose-500'
-                          : 'hover:bg-slate-800/40'
+                        isRogueAlert ? 'bg-rose-950/25 hover:bg-rose-950/45' : 'hover:bg-slate-800/40'
                       }`}
                       onClick={() => setSelectedEvent(evt)}
                     >
@@ -215,21 +237,23 @@ export const SiemAuditStream: React.FC = () => {
                       </td>
                       <td className="px-4 py-2.5 whitespace-nowrap">
                         {isRogueAlert ? (
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-900/90 text-rose-100 border border-rose-500 flex items-center gap-1 w-max">
-                            <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse"></span>
-                            CRITICAL (SEV 10)
+                          <span className="text-[11px] font-bold text-rose-400 flex items-center gap-1.5">
+                            <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
+                            <span>CRITICAL (SEV 10)</span>
+                          </span>
+                        ) : isSuccess ? (
+                          <span className="text-[11px] text-emerald-400 flex items-center gap-1.5">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>{evt.status_code || evt.outcome}</span>
                           </span>
                         ) : (
                           <span
-                            className={`text-[11px] px-2 py-0.5 rounded ${
-                              isSuccess
-                                ? 'bg-emerald-950/80 text-emerald-400 border border-emerald-800/80'
-                                : evt.outcome === 'AUTH_FAILED'
-                                ? 'bg-rose-950/80 text-rose-400 border border-rose-800/80'
-                                : 'bg-amber-950/80 text-amber-400 border border-amber-800/80'
+                            className={`text-[11px] flex items-center gap-1.5 ${
+                              evt.outcome === 'AUTH_FAILED' ? 'text-rose-400' : 'text-amber-400'
                             }`}
                           >
-                            {evt.status_code || evt.outcome}
+                            <XCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>{evt.status_code || evt.outcome}</span>
                           </span>
                         )}
                       </td>
@@ -243,7 +267,7 @@ export const SiemAuditStream: React.FC = () => {
                             e.stopPropagation();
                             setSelectedEvent(evt);
                           }}
-                          className="p-1 hover:text-emerald-400 text-slate-500"
+                          className="p-1 hover:text-emerald-400 text-slate-500 cursor-pointer"
                         >
                           <Eye className="w-3.5 h-3.5" />
                         </button>
@@ -268,31 +292,39 @@ export const SiemAuditStream: React.FC = () => {
               </div>
               <button
                 onClick={() => setSelectedEvent(null)}
-                className="text-slate-400 hover:text-white text-base px-2 py-1"
+                className="text-slate-400 hover:text-white text-base px-2 py-1 cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
             {/* High-Severity Security Alert Banner in Modal */}
-            {(selectedEvent.is_high_severity_alert || selectedEvent.severity === 10 || selectedEvent.outcome === 'SECURITY_ALERT_ROGUE_AGENT') && (
+            {(selectedEvent.is_high_severity_alert ||
+              selectedEvent.severity === 10 ||
+              selectedEvent.outcome === 'SECURITY_ALERT_ROGUE_AGENT' ||
+              selectedEvent.status_code === 'CRITICAL_SECURITY_ALERT') && (
               <div className="p-3.5 rounded bg-rose-950/50 border border-rose-600 text-rose-200 space-y-1.5">
                 <div className="flex items-center gap-2 font-bold text-sm text-rose-300">
                   <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
-                  <span>HIGH SEVERITY SECURITY ALERT - ROGUE AGENT DETECTED</span>
-                  <span className="ml-auto font-mono text-xs bg-rose-900 px-2 py-0.5 rounded text-white border border-rose-500">SEVERITY: 10</span>
+                  <span>HIGH SEVERITY SECURITY ALERT — ROGUE AGENT DETECTED</span>
+                  <span className="ml-auto font-mono text-xs text-rose-200">SEVERITY: 10</span>
                 </div>
                 <p className="text-[11px] text-rose-300 leading-relaxed">
-                  The AD-Proxy intercepted and blocked an unsanctioned privileged request targeting Tier-0 Active Directory assets. The connection was terminated immediately and escalated to SIEM SOC.
+                  The AD-Proxy intercepted and blocked an unsanctioned privileged request targeting Tier-0 Active
+                  Directory assets. The connection was terminated immediately and escalated to SIEM SOC.
                 </p>
-                <div className="grid grid-cols-2 gap-2 pt-1 text-[11px] font-mono">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 text-[11px] font-mono">
                   <div>
                     <span className="text-rose-400/80">Trigger Rule: </span>
-                    <span className="text-white font-bold">{selectedEvent.alert_rule || 'ROGUE_AGENT_UNAUTHORIZED_TARGET'}</span>
+                    <span className="text-white font-bold">
+                      {selectedEvent.alert_rule || 'ROGUE_AGENT_UNAUTHORIZED_TARGET'}
+                    </span>
                   </div>
                   <div>
                     <span className="text-rose-400/80">Threat Indicator: </span>
-                    <span className="text-white font-bold">{selectedEvent.threat?.indicator || 'ROGUE_OR_HALLUCINATING_AGENT'}</span>
+                    <span className="text-white font-bold">
+                      {selectedEvent.threat?.indicator || 'ROGUE_OR_HALLUCINATING_AGENT'}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -309,11 +341,15 @@ export const SiemAuditStream: React.FC = () => {
               </div>
               <div>
                 <span className="text-slate-500 block">Outcome Status:</span>
-                <span className="font-mono font-bold text-amber-300">{selectedEvent.status_code || selectedEvent.outcome}</span>
+                <span className="font-mono font-bold text-amber-300">
+                  {selectedEvent.status_code || selectedEvent.outcome}
+                </span>
               </div>
               <div>
                 <span className="text-slate-500 block">Execution Latency:</span>
-                <span className="font-mono tabular-nums text-slate-200">{selectedEvent.duration_ms?.toFixed(2)} ms</span>
+                <span className="font-mono tabular-nums text-slate-200">
+                  {selectedEvent.duration_ms?.toFixed(2)} ms
+                </span>
               </div>
               <div className="col-span-2">
                 <span className="text-slate-500 block">Reason / Audit Message:</span>
@@ -328,7 +364,7 @@ export const SiemAuditStream: React.FC = () => {
                 <div className="flex items-center gap-1 bg-slate-950 p-0.5 rounded border border-slate-800">
                   <button
                     onClick={() => setViewFormat('ecs')}
-                    className={`px-2 py-0.5 rounded text-[11px] ${
+                    className={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${
                       viewFormat === 'ecs' ? 'bg-slate-800 text-white' : 'text-slate-400'
                     }`}
                   >
@@ -336,7 +372,7 @@ export const SiemAuditStream: React.FC = () => {
                   </button>
                   <button
                     onClick={() => setViewFormat('cef')}
-                    className={`px-2 py-0.5 rounded text-[11px] ${
+                    className={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${
                       viewFormat === 'cef' ? 'bg-slate-800 text-white' : 'text-slate-400'
                     }`}
                   >
@@ -355,7 +391,7 @@ export const SiemAuditStream: React.FC = () => {
             <div className="pt-2 flex justify-end">
               <button
                 onClick={() => setSelectedEvent(null)}
-                className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded text-xs"
+                className="px-4 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded text-xs cursor-pointer"
               >
                 Close
               </button>
