@@ -1,0 +1,61 @@
+# ==============================================================================
+# Active Directory LDAPS Proxy - Full-Stack (Web Console + Python Engine)
+# Multi-stage build with React Web Console and Python Zero-Trust Engine
+# ==============================================================================
+
+# Stage 1: Build Vite React Frontend
+FROM node:20-bookworm-slim AS client-builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --quiet
+COPY . .
+RUN npm run build
+
+# Stage 2: Final Full-Stack Container
+FROM node:20-bookworm-slim AS runner
+
+# Install Python 3.11 runtime and security updates
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-minimal \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Create unprivileged adproxy user
+RUN groupadd -g 10001 -r adproxy && \
+    useradd -u 10001 -r -g adproxy -s /bin/bash -m -d /app adproxy
+
+# Copy Node dependencies and compiled client
+COPY --from=client-builder --chown=adproxy:adproxy /app/node_modules /app/node_modules
+COPY --from=client-builder --chown=adproxy:adproxy /app/dist /app/dist
+COPY --from=client-builder --chown=adproxy:adproxy /app/package*.json /app/
+COPY --from=client-builder --chown=adproxy:adproxy /app/server.ts /app/
+COPY --from=client-builder --chown=adproxy:adproxy /app/tsconfig.json /app/
+COPY --from=client-builder --chown=adproxy:adproxy /app/vite.config.ts /app/
+
+# Copy Python proxy engine & certificates
+COPY --chown=adproxy:adproxy ad_proxy /app/ad_proxy
+COPY --chown=adproxy:adproxy certs /app/certs
+COPY --chown=adproxy:adproxy tests /app/tests
+
+# Create runtime logs directory
+RUN mkdir -p /app/logs && \
+    chown -R adproxy:adproxy /app && \
+    chmod 750 /app/logs && \
+    chmod 700 /app/certs
+
+USER 10001:10001
+
+ENV NODE_ENV=production \
+    PORT=3000 \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 3000 10636
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://127.0.0.1:3000/api/proxy/commands || exit 1
+
+CMD ["npm", "start"]

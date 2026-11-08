@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ad-ldaps-proxy"
+version = "1.0.0"
+description = "Enterprise Active Directory Secure LDAPS Proxy for AI Agents and Service Accounts"
+readme = "README.md"
+authors = [
+    { name = "Enterprise Security Operations", email = "secops@corp.acme.internal" }
+]
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: System :: Systems Administration :: Authentication/Directory :: LDAP",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "pyyaml>=6.0.1",
+    "ldap3>=2.9.1",
+    "cryptography>=42.0.0",
+    "hvac>=2.1.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+ad-proxy = "ad_proxy.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ad_proxy*"]

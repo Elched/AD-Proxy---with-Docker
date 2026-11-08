@@ -1,0 +1,36 @@
+[Unit]
+Description=Active Directory Secure LDAPS Proxy for AI Agents
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=adproxy
+Group=adproxy
+WorkingDirectory=/opt/ad-proxy
+ExecStart=/opt/ad-proxy/venv/bin/python3 -m ad_proxy.cli --run --tls --config /opt/ad-proxy/ad_proxy/config.yaml
+Restart=always
+RestartSec=5s
+
+# Security Hardening (systemd sandbox)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateTmp=true
+PrivateDevices=true
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+ReadWritePaths=/opt/ad-proxy/logs /tmp
+
+# Environment Variables
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# Resource Limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

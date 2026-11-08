@@ -1,0 +1,85 @@
+# ==============================================================================
+# Active Directory Secure LDAPS Proxy - Modern Docker Compose Specification
+# Compliant with official Compose Specification (v2+) & CIS Container Hardening
+# ==============================================================================
+
+name: ad-ldaps-proxy
+
+services:
+  ad-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ad-ldaps-proxy:1.0.0
+    container_name: ad-proxy-engine
+    hostname: ad-proxy.corp.acme.internal
+    restart: unless-stopped
+
+    # Ports: Expose LDAPS REST Gateway (10636)
+    ports:
+      - "10636:10636"
+
+    # Security Hardening (CIS Docker Benchmark)
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    user: "10001:10001"
+
+    # In-memory ephemeral scratch space (writable tmpfs)
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+
+    # Persistent Data & Configuration Mounts
+    volumes:
+      # Mount active YAML configuration (Read-Only)
+      - ./ad_proxy/config.yaml:/app/ad_proxy/config.yaml:ro
+      # Mount Enterprise TLS Certificates & CA bundle (Read-Only)
+      - ./certs:/app/certs:ro
+      # Persist SIEM Audit Logs (Read-Write)
+      - ./logs:/app/logs:rw
+
+    # Environment variables (supports .env interpolation)
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - CONFIG_PATH=/app/ad_proxy/config.yaml
+      - AD_DOMAIN=${AD_DOMAIN:-corp.acme.internal}
+      - AD_UPSTREAM_PASSWORD=${AD_UPSTREAM_PASSWORD:-}
+      - VAULT_ADDR=${VAULT_ADDR:-https://vault.corp.acme.internal:8200}
+      - VAULT_TOKEN=${VAULT_TOKEN:-}
+      - SIEM_FORMAT=${SIEM_FORMAT:-ecs_json}
+
+    # Resource Constraints
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.2'
+          memory: 128M
+
+    # Docker Healthcheck
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request, ssl; ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE; res = urllib.request.urlopen('https://127.0.0.1:10636/health', context=ctx, timeout=3); exit(0 if res.status == 200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # Standard JSON Logging with Log Rotation
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+    networks:
+      - ad-proxy-network
+
+networks:
+  ad-proxy-network:
+    driver: bridge
+    name: ad-proxy-net
